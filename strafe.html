@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tank Arena - MULTIPLAYER</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #cdcdcd;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        canvas {
+            border: 2px solid #555;
+            background: #f0f0f0;
+        }
+        #connectionStatus {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div id="connectionStatus">Connecting...</div>
+    <canvas id="gameCanvas"></canvas>
+    
+    <!-- Socket.io client library -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas size
+        canvas.width = 1200;
+        canvas.height = 800;
+        
+        // Arena settings
+        const ARENA_WIDTH = 1600;
+        const ARENA_HEIGHT = 1200;
+        const GRID_SIZE = 50;
+        
+        // MULTIPLAYER: Connect to server
+        const socket = io();
+        const otherPlayers = {};
+        let mySocketId = null;
+        
+        socket.on('connect', () => {
+            mySocketId = socket.id;
+            document.getElementById('connectionStatus').textContent = 'Connected! Players: 1';
+            document.getElementById('connectionStatus').style.background = 'rgba(76, 175, 80, 0.8)';
+        });
+        
+        socket.on('currentPlayers', (players) => {
+            Object.keys(players).forEach(id => {
+                if (id !== socket.id) {
+                    otherPlayers[id] = players[id];
+                }
+            });
+            updatePlayerCount();
+        });
+        
+        socket.on('newPlayer', (playerData) => {
+            otherPlayers[playerData.id] = playerData;
+            updatePlayerCount();
+        });
+        
+        socket.on('playerMoved', (playerData) => {
+            if (otherPlayers[playerData.id]) {
+                otherPlayers[playerData.id] = playerData;
+            }
+        });
+        
+        socket.on('playerShot', (data) => {
+            // Add bullet from other player
+            if (data.playerId !== socket.id) {
+                bullets.push(data.bullet);
+            }
+        });
+        
+        socket.on('playerDisconnected', (playerId) => {
+            delete otherPlayers[playerId];
+            updatePlayerCount();
+        });
+        
+        socket.on('disconnect', () => {
+            document.getElementById('connectionStatus').textContent = 'Disconnected';
+            document.getElementById('connectionStatus').style.background = 'rgba(231, 76, 60, 0.8)';
+        });
+        
+        function updatePlayerCount() {
+            const count = Object.keys(otherPlayers).length + 1;
+            document.getElementById('connectionStatus').textContent = `Connected! Players: ${count}`;
+        }
+        
+        // Player object
+        const player = {
+            x: ARENA_WIDTH / 2,
+            y: ARENA_HEIGHT / 2,
+            radius: 20,
+            angle: 0,
+            speed: 2.2,
+            boostSpeed: 4.5,
+            velocityX: 0,
+            velocityY: 0,
+            momentum: 0.98,
+            barrelLength: 35,
+            barrelWidth: 15,
+            color: '#00b2e1',
+            energy: 100,
+            maxEnergy: 100,
+            energyRegen: 0.15,
+            invulnerable: false,
+            invulnerableTime: 0,
+            invulnerableDuration: 2000,
+            isBoosting: false,
+            boostDrainRate: 0.3,
+            killStreak: 0,
+            bountyMultiplier: 1.0,
+            dollarValue: 1.0,
+            isExtracting: false,
+            extractionStartTime: 0,
+            extractionDuration: 3000,
+            extractionSlowdown: 0.5
+        };
+        
+        // Camera
+        const camera = {
+            x: player.x - canvas.width / 2,
+            y: player.y - canvas.height / 2
+        };
+        
+        // Input handling
+        const keys = {};
+        const mouse = { x: 0, y: 0 };
+        
+        // Bullets array
+        const bullets = [];
+        
+        // Charging system
+        const charging = {
+            isCharging: false,
+            chargeStartTime: 0,
+            chargeLevel: 0,
+            CHARGE_THRESHOLD_1: 500,
+            CHARGE_THRESHOLD_2: 1000
+        };
+        
+        // Energy pickups array
+        const energyPickups = [];
+        const ENERGY_SPAWN_INTERVAL = 5000;
+        const ENERGY_PICKUP_RADIUS = 12;
+        let lastEnergySpawn = Date.now();
+        
+        // Money pickups array
+        const moneyPickups = [];
+        const MONEY_PICKUP_RADIUS = 15;
+        
+        // Enemies array (for single-player mode - can be disabled in multiplayer)
+        const enemies = [];
+        const ENEMY_SPAWN_INTERVAL = 5000;
+        const MAX_ENEMIES = 5;
+        let lastEnemySpawn = Date.now();
+        
+        window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+        window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+        
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+        });
+        
+        canvas.addEventListener('mousedown', () => {
+            if (player.isExtracting) return;
+            
+            if (player.energy >= 5) {
+                shootBullet(0);
+                
+                if (player.energy >= 5) {
+                    charging.isCharging = true;
+                    charging.chargeStartTime = Date.now();
+                }
+            }
+        });
+        
+        canvas.addEventListener('mouseup', () => {
+            if (player.isExtracting) {
+                charging.isCharging = false;
+                charging.chargeLevel = 0;
+                return;
+            }
+            
+            if (charging.isCharging && player.energy >= 10) {
+                const chargeLevel = getChargeLevel();
+                if (chargeLevel > 0) {
+                    shootBullet(chargeLevel);
+                }
+            }
+            charging.isCharging = false;
+            charging.chargeLevel = 0;
+        });
+        
+        function getChargeLevel() {
+            if (!charging.isCharging) return 0;
+            const chargeTime = Date.now() - charging.chargeStartTime;
+            if (chargeTime >= charging.CHARGE_THRESHOLD_2) return 2;
+            if (chargeTime >= charging.CHARGE_THRESHOLD_1) return 1;
+            return 0;
+        }
+        
+        function shootBullet(chargeLevel = 0) {
+            let bulletSpeed, bulletRadius, bulletColor, bulletDamage, energyCost;
+            
+            switch(chargeLevel) {
+                case 0:
+                    bulletSpeed = 6;
+                    bulletRadius = 8;
+                    bulletColor = '#00b2e1';
+                    bulletDamage = 1;
+                    energyCost = 5;
+                    break;
+                case 1:
+                    bulletSpeed = 7;
+                    bulletRadius = 12;
+                    bulletColor = '#FFD700';
+                    bulletDamage = 2;
+                    energyCost = 10;
+                    break;
+                case 2:
+                    bulletSpeed = 8;
+                    bulletRadius = 16;
+                    bulletColor = '#FF4500';
+                    bulletDamage = 3;
+                    energyCost = 15;
+                    break;
+            }
+            
+            if (player.energy < energyCost) return;
+            
+            player.energy -= energyCost;
+            
+            const bullet = {
+                x: player.x + Math.cos(player.angle) * (player.radius + player.barrelLength),
+                y: player.y + Math.sin(player.angle) * (player.radius + player.barrelLength),
+                vx: Math.cos(player.angle) * bulletSpeed,
+                vy: Math.sin(player.angle) * bulletSpeed,
+                radius: bulletRadius,
+                color: bulletColor,
+                damage: bulletDamage,
+                chargeLevel: chargeLevel,
+                ownerId: socket.id
+            };
+            
+            bullets.push(bullet);
+            
+            // MULTIPLAYER: Send bullet to server
+            socket.emit('playerShoot', bullet);
+        }
+        
+        function spawnEnergyPickup(x, y, amount = 20) {
+            energyPickups.push({
+                x: x,
+                y: y,
+                radius: ENERGY_PICKUP_RADIUS,
+                amount: amount
+            });
+        }
+        
+        function spawnRandomEnergy() {
+            const padding = 50;
+            spawnEnergyPickup(
+                padding + Math.random() * (ARENA_WIDTH - padding * 2),
+                padding + Math.random() * (ARENA_HEIGHT - padding * 2),
+                20
+            );
+        }
+        
+        function spawnMoneyPickup(x, y, amount) {
+            moneyPickups.push({
+                x: x,
+                y: y,
+                radius: MONEY_PICKUP_RADIUS,
+                amount: amount
+            });
+        }
+        
+        function updateBountyMultiplier() {
+            if (player.killStreak === 0) {
+                player.bountyMultiplier = 1.0;
+            } else if (player.killStreak < 3) {
+                player.bountyMultiplier = 1.5;
+            } else if (player.killStreak < 5) {
+                player.bountyMultiplier = 2.0;
+            } else {
+                player.bountyMultiplier = 3.0;
+            }
+        }
+        
+        function drawGrid() {
+            ctx.strokeStyle = '#d0d0d0';
+            ctx.lineWidth = 1;
+            
+            const startX = Math.floor(camera.x / GRID_SIZE) * GRID_SIZE;
+            const startY = Math.floor(camera.y / GRID_SIZE) * GRID_SIZE;
+            const endX = camera.x + canvas.width;
+            const endY = camera.y + canvas.height;
+            
+            for (let x = startX; x < endX; x += GRID_SIZE) {
+                ctx.beginPath();
+                ctx.moveTo(x - camera.x, 0);
+                ctx.lineTo(x - camera.x, canvas.height);
+                ctx.stroke();
+            }
+            
+            for (let y = startY; y < endY; y += GRID_SIZE) {
+                ctx.beginPath();
+                ctx.moveTo(0, y - camera.y);
+                ctx.lineTo(canvas.width, y - camera.y);
+                ctx.stroke();
+            }
+        }
+        
+        function drawBorders() {
+            ctx.strokeStyle = '#555';
+            ctx.lineWidth = 10;
+            ctx.strokeRect(
+                -camera.x,
+                -camera.y,
+                ARENA_WIDTH,
+                ARENA_HEIGHT
+            );
+        }
+        
+        function drawPlayer() {
+            const screenX = player.x - camera.x;
+            const screenY = player.y - camera.y;
+            
+            if (player.invulnerable && Math.floor(Date.now() / 100) % 2 === 0) {
+                return;
+            }
+            
+            if (player.isExtracting) {
+                const progress = (Date.now() - player.extractionStartTime) / player.extractionDuration;
+                const barWidth = 60;
+                const barHeight = 8;
+                const barY = screenY - player.radius - 35;
+                
+                ctx.fillStyle = '#333';
+                ctx.fillRect(screenX - barWidth / 2, barY, barWidth, barHeight);
+                
+                ctx.fillStyle = '#4CAF50';
+                ctx.fillRect(screenX - barWidth / 2, barY, barWidth * progress, barHeight);
+                
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(screenX - barWidth / 2, barY, barWidth, barHeight);
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('EXTRACTING...', screenX, barY - 5);
+            }
+            
+            if (player.bountyMultiplier > 1.0) {
+                let glowColor, glowSize;
+                if (player.bountyMultiplier >= 3.0) {
+                    glowColor = '#FF4500';
+                    glowSize = player.radius + 15;
+                } else if (player.bountyMultiplier >= 2.0) {
+                    glowColor = '#FFD700';
+                    glowSize = player.radius + 12;
+                } else {
+                    glowColor = '#4CAF50';
+                    glowSize = player.radius + 8;
+                }
+                
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, glowSize, 0, Math.PI * 2);
+                ctx.strokeStyle = glowColor;
+                ctx.lineWidth = 3;
+                ctx.globalAlpha = 0.6 + Math.sin(Date.now() / 200) * 0.2;
+                ctx.stroke();
+                ctx.globalAlpha = 1.0;
+            }
+            
+            if (player.isBoosting) {
+                ctx.save();
+                ctx.strokeStyle = 'rgba(0, 178, 225, 0.4)';
+                ctx.lineWidth = 2;
+                
+                for (let i = 0; i < 3; i++) {
+                    const angle = player.angle + Math.PI;
+                    const distance = 30 + i * 10;
+                    const length = 15;
+                    
+                    const startX = screenX + Math.cos(angle) * distance;
+                    const startY = screenY + Math.sin(angle) * distance;
+                    const endX = startX + Math.cos(angle) * length;
+                    const endY = startY + Math.sin(angle) * length;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(startX, startY);
+                    ctx.lineTo(endX, endY);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+            
+            if (charging.isCharging && !player.isExtracting) {
+                const chargeLevel = getChargeLevel();
+                let chargeColor;
+                
+                if (chargeLevel === 2) {
+                    chargeColor = '#FF4500';
+                } else if (chargeLevel === 1) {
+                    chargeColor = '#FFD700';
+                } else {
+                    chargeColor = '#00b2e1';
+                }
+                
+                const pulseSize = player.radius + 5 + Math.sin(Date.now() / 100) * 3;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, pulseSize, 0, Math.PI * 2);
+                ctx.strokeStyle = chargeColor;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
+            
+            ctx.save();
+            ctx.translate(screenX, screenY);
+            ctx.rotate(player.angle);
+            
+            ctx.fillStyle = '#888';
+            ctx.fillRect(
+                player.radius / 2,
+                -player.barrelWidth / 2,
+                player.barrelLength,
+                player.barrelWidth
+            );
+            
+            ctx.restore();
+            
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, player.radius, 0, Math.PI * 2);
+            ctx.fillStyle = player.color;
+            ctx.fill();
+            ctx.strokeStyle = '#555';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            
+            ctx.fillStyle = '#FFD700';
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 3;
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.strokeText(`$${player.dollarValue.toFixed(2)}`, screenX, screenY - player.radius - 10);
+            ctx.fillText(`$${player.dollarValue.toFixed(2)}`, screenX, screenY - player.radius - 10);
+        }
+        
+        // MULTIPLAYER: Draw other players
+        function drawOtherPlayers() {
+            Object.values(otherPlayers).forEach(otherPlayer => {
+                const screenX = otherPlayer.x - camera.x;
+                const screenY = otherPlayer.y - camera.y;
+                
+                // Draw barrel
+                ctx.save();
+                ctx.translate(screenX, screenY);
+                ctx.rotate(otherPlayer.angle);
+                
+                ctx.fillStyle = '#888';
+                ctx.fillRect(
+                    20 / 2,
+                    -15 / 2,
+                    35,
+                    15
+                );
+                
+                ctx.restore();
+                
+                // Draw body (different color for other players)
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, 20, 0, Math.PI * 2);
+                ctx.fillStyle = '#e74c3c'; // Red for other players
+                ctx.fill();
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                
+                // Draw dollar value
+                ctx.fillStyle = '#FFD700';
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.font = 'bold 14px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                ctx.strokeText(`$${otherPlayer.dollarValue.toFixed(2)}`, screenX, screenY - 20 - 10);
+                ctx.fillText(`$${otherPlayer.dollarValue.toFixed(2)}`, screenX, screenY - 20 - 10);
+            });
+        }
+        
+        function drawBullets() {
+            bullets.forEach(bullet => {
+                const screenX = bullet.x - camera.x;
+                const screenY = bullet.y - camera.y;
+                
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, bullet.radius, 0, Math.PI * 2);
+                ctx.fillStyle = bullet.color;
+                ctx.fill();
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            });
+        }
+        
+        function drawEnergyPickups() {
+            energyPickups.forEach(pickup => {
+                const screenX = pickup.x - camera.x;
+                const screenY = pickup.y - camera.y;
+                
+                let color = '#4CAF50';
+                if (pickup.amount >= 60) {
+                    color = '#FFD700';
+                } else if (pickup.amount >= 40) {
+                    color = '#FF9800';
+                }
+                
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, pickup.radius, 0, Math.PI * 2);
+                ctx.fillStyle = color;
+                ctx.fill();
+                
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 14px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('E', screenX, screenY);
+            });
+        }
+        
+        function drawMoneyPickups() {
+            moneyPickups.forEach(pickup => {
+                const screenX = pickup.x - camera.x;
+                const screenY = pickup.y - camera.y;
+                
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, pickup.radius, 0, Math.PI * 2);
+                ctx.fillStyle = '#FFD700';
+                ctx.fill();
+                
+                ctx.strokeStyle = '#FFA500';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                
+                ctx.fillStyle = '#000';
+                ctx.font = 'bold 16px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('$', screenX, screenY);
+                
+                ctx.fillStyle = '#333';
+                ctx.font = 'bold 10px Arial';
+                ctx.fillText(pickup.amount.toFixed(2), screenX, screenY + pickup.radius + 8);
+            });
+        }
+        
+        function drawUI() {
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            
+            ctx.fillStyle = '#333';
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText('ENERGY', 20, 20);
+            
+            const barX = 20;
+            const barY = 45;
+            const segmentWidth = 16;
+            const segmentHeight = 8;
+            const segmentSpacing = 2;
+            const maxSegments = 20;
+            
+            const filledSegments = Math.floor(player.energy / 5);
+            
+            for (let i = 0; i < maxSegments; i++) {
+                const x = barX + (i % 4) * (segmentWidth + segmentSpacing);
+                const y = barY + Math.floor(i / 4) * (segmentHeight + segmentSpacing);
+                
+                ctx.fillStyle = '#555';
+                ctx.fillRect(x, y, segmentWidth, segmentHeight);
+                
+                if (i < filledSegments) {
+                    if (player.energy >= 70) {
+                        ctx.fillStyle = '#4CAF50';
+                    } else if (player.energy >= 30) {
+                        ctx.fillStyle = '#FFD700';
+                    } else {
+                        ctx.fillStyle = '#e74c3c';
+                    }
+                    ctx.fillRect(x + 1, y + 1, segmentWidth - 2, segmentHeight - 2);
+                }
+            }
+            
+            if (player.bountyMultiplier > 1.0) {
+                ctx.fillStyle = '#333';
+                ctx.font = 'bold 18px Arial';
+                ctx.fillText(`BOUNTY: ${player.bountyMultiplier}x`, 120, 20);
+                
+                ctx.font = 'bold 14px Arial';
+                ctx.fillText(`Streak: ${player.killStreak}`, 120, 45);
+            }
+            
+            ctx.restore();
+        }
+        
+        function updatePlayer() {
+            const now = Date.now();
+            
+            if (keys['q']) {
+                if (!player.isExtracting) {
+                    player.isExtracting = true;
+                    player.extractionStartTime = now;
+                }
+                
+                if (now - player.extractionStartTime >= player.extractionDuration) {
+                    alert(`EXTRACTED! You cashed out $${player.dollarValue.toFixed(2)}`);
+                    player.dollarValue = 1.0;
+                    player.energy = player.maxEnergy;
+                    player.x = ARENA_WIDTH / 2;
+                    player.y = ARENA_HEIGHT / 2;
+                    player.velocityX = 0;
+                    player.velocityY = 0;
+                    player.isExtracting = false;
+                    player.killStreak = 0;
+                    updateBountyMultiplier();
+                    enemies.length = 0;
+                    energyPickups.length = 0;
+                    moneyPickups.length = 0;
+                }
+            } else {
+                player.isExtracting = false;
+            }
+            
+            player.isBoosting = false;
+            if (!player.isExtracting && keys[' '] && player.energy > 0) {
+                player.isBoosting = true;
+                player.energy = Math.max(0, player.energy - player.boostDrainRate);
+            } else {
+                player.energy = Math.min(player.maxEnergy, player.energy + player.energyRegen);
+            }
+            
+            let inputX = 0;
+            let inputY = 0;
+            
+            if (!player.isExtracting) {
+                if (keys['w'] || keys['arrowup']) inputY -= 1;
+                if (keys['s'] || keys['arrowdown']) inputY += 1;
+                if (keys['a'] || keys['arrowleft']) inputX -= 1;
+                if (keys['d'] || keys['arrowright']) inputX += 1;
+                
+                if (inputX !== 0 && inputY !== 0) {
+                    inputX *= 0.707;
+                    inputY *= 0.707;
+                }
+                
+                const acceleration = 0.3;
+                player.velocityX += inputX * acceleration;
+                player.velocityY += inputY * acceleration;
+            } else {
+                player.velocityX *= 0.95;
+                player.velocityY *= 0.95;
+            }
+            
+            player.velocityX *= player.momentum;
+            player.velocityY *= player.momentum;
+            
+            const maxVelocity = player.isBoosting ? 6 : 4;
+            const velocity = Math.hypot(player.velocityX, player.velocityY);
+            if (velocity > maxVelocity) {
+                player.velocityX = (player.velocityX / velocity) * maxVelocity;
+                player.velocityY = (player.velocityY / velocity) * maxVelocity;
+            }
+            
+            player.x += player.velocityX;
+            player.y += player.velocityY;
+            
+            if (player.x - player.radius <= 0 || player.x + player.radius >= ARENA_WIDTH ||
+                player.y - player.radius <= 0 || player.y + player.radius >= ARENA_HEIGHT) {
+                spawnMoneyPickup(player.x, player.y, player.dollarValue);
+                
+                player.dollarValue = 1.0;
+                player.energy = player.maxEnergy;
+                player.x = ARENA_WIDTH / 2;
+                player.y = ARENA_HEIGHT / 2;
+                player.velocityX = 0;
+                player.velocityY = 0;
+                player.killStreak = 0;
+                updateBountyMultiplier();
+                player.invulnerable = true;
+                player.invulnerableTime = now;
+            }
+            
+            if (!player.isExtracting) {
+                player.angle = Math.atan2(
+                    mouse.y - (player.y - camera.y),
+                    mouse.x - (player.x - camera.x)
+                );
+            }
+            
+            const magneticRange = 80;
+            for (let i = energyPickups.length - 1; i >= 0; i--) {
+                const pickup = energyPickups[i];
+                const dist = Math.hypot(player.x - pickup.x, player.y - pickup.y);
+                
+                if (dist < magneticRange && dist > player.radius + pickup.radius) {
+                    const pullStrength = 0.5;
+                    const angle = Math.atan2(player.y - pickup.y, player.x - pickup.x);
+                    pickup.x += Math.cos(angle) * pullStrength;
+                    pickup.y += Math.sin(angle) * pullStrength;
+                }
+                
+                if (dist < player.radius + pickup.radius) {
+                    player.energy = Math.min(player.maxEnergy, player.energy + pickup.amount);
+                    energyPickups.splice(i, 1);
+                }
+            }
+            
+            for (let i = moneyPickups.length - 1; i >= 0; i--) {
+                const pickup = moneyPickups[i];
+                const dist = Math.hypot(player.x - pickup.x, player.y - pickup.y);
+                
+                if (dist < magneticRange && dist > player.radius + pickup.radius) {
+                    const pullStrength = 0.5;
+                    const angle = Math.atan2(player.y - pickup.y, player.x - pickup.x);
+                    pickup.x += Math.cos(angle) * pullStrength;
+                    pickup.y += Math.sin(angle) * pullStrength;
+                }
+                
+                if (dist < player.radius + pickup.radius) {
+                    player.dollarValue += pickup.amount;
+                    moneyPickups.splice(i, 1);
+                }
+            }
+            
+            if (player.invulnerable) {
+                if (now - player.invulnerableTime > player.invulnerableDuration) {
+                    player.invulnerable = false;
+                }
+            }
+            
+            // MULTIPLAYER: Send player state to server
+            if (socket.connected) {
+                socket.emit('playerUpdate', {
+                    x: player.x,
+                    y: player.y,
+                    angle: player.angle,
+                    velocityX: player.velocityX,
+                    velocityY: player.velocityY,
+                    dollarValue: player.dollarValue,
+                    energy: player.energy
+                });
+            }
+        }
+        
+        function updateBullets() {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const bullet = bullets[i];
+                bullet.x += bullet.vx;
+                bullet.y += bullet.vy;
+                
+                if (bullet.x < 0 || bullet.x > ARENA_WIDTH || 
+                    bullet.y < 0 || bullet.y > ARENA_HEIGHT) {
+                    bullets.splice(i, 1);
+                }
+            }
+        }
+        
+        function updateCamera() {
+            camera.x = player.x - canvas.width / 2;
+            camera.y = player.y - canvas.height / 2;
+            
+            camera.x = Math.max(0, Math.min(ARENA_WIDTH - canvas.width, camera.x));
+            camera.y = Math.max(0, Math.min(ARENA_HEIGHT - canvas.height, camera.y));
+        }
+        
+        function gameLoop() {
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            updatePlayer();
+            updateBullets();
+            updateCamera();
+            
+            drawGrid();
+            drawBorders();
+            drawEnergyPickups();
+            drawMoneyPickups();
+            drawOtherPlayers(); // MULTIPLAYER: Draw other players
+            drawBullets();
+            drawPlayer();
+            drawUI();
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        gameLoop();
+    </script>
+</body>
+</html>
