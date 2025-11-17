@@ -53,7 +53,7 @@
         const GRID_SIZE = 50;
         
         // MULTIPLAYER: Connect to server
-        const socket = io();
+        const socket = io('http://localhost:3000');
         const otherPlayers = {};
         let mySocketId = null;
         
@@ -87,6 +87,53 @@
             // Add bullet from other player
             if (data.playerId !== socket.id) {
                 bullets.push(data.bullet);
+            }
+        });
+        
+        socket.on('playerHit', (data) => {
+            // Update other player's energy when hit
+            if (otherPlayers[data.targetId]) {
+                otherPlayers[data.targetId].energy = data.energy;
+            }
+            // Update our own energy if we were hit
+            if (data.targetId === socket.id) {
+                player.energy = data.energy;
+            }
+        });
+        
+        socket.on('playerDied', (data) => {
+            if (data.playerId === socket.id) {
+                // We died - respawn
+                player.x = data.respawn.x;
+                player.y = data.respawn.y;
+                player.velocityX = 0;
+                player.velocityY = 0;
+                player.energy = 100;
+                player.dollarValue = 1.0;
+                player.invulnerable = true;
+                player.invulnerableTime = Date.now();
+            } else if (otherPlayers[data.playerId]) {
+                // Other player died
+                otherPlayers[data.playerId] = data.respawn;
+            }
+            
+            // Add money drop
+            moneyPickups.push(data.moneyDrop);
+        });
+        
+        socket.on('currentMoney', (money) => {
+            money.forEach(m => moneyPickups.push(m));
+        });
+        
+        socket.on('moneyPickedUp', (data) => {
+            // Remove money from local array
+            const index = moneyPickups.findIndex(m => m.id === data.moneyId);
+            if (index !== -1) {
+                moneyPickups.splice(index, 1);
+            }
+            // Update player's dollar value
+            if (otherPlayers[data.playerId]) {
+                // Money was picked up by calculation on server, just sync
             }
         });
         
@@ -289,12 +336,15 @@
         }
         
         function spawnMoneyPickup(x, y, amount) {
-            moneyPickups.push({
+            const money = {
                 x: x,
                 y: y,
                 radius: MONEY_PICKUP_RADIUS,
-                amount: amount
-            });
+                amount: amount,
+                id: Date.now() + Math.random()
+            };
+            moneyPickups.push(money);
+            return money;
         }
         
         function updateBountyMultiplier() {
@@ -758,6 +808,8 @@
                 
                 if (dist < player.radius + pickup.radius) {
                     player.dollarValue += pickup.amount;
+                    // Tell server we picked it up
+                    socket.emit('pickupMoney', pickup.id);
                     moneyPickups.splice(i, 1);
                 }
             }
@@ -788,8 +840,48 @@
                 bullet.x += bullet.vx;
                 bullet.y += bullet.vy;
                 
+                // Check collision with walls
                 if (bullet.x < 0 || bullet.x > ARENA_WIDTH || 
                     bullet.y < 0 || bullet.y > ARENA_HEIGHT) {
+                    bullets.splice(i, 1);
+                    continue;
+                }
+                
+                // Check collision with other players
+                let hitSomeone = false;
+                Object.keys(otherPlayers).forEach(playerId => {
+                    const otherPlayer = otherPlayers[playerId];
+                    const dist = Math.hypot(bullet.x - otherPlayer.x, bullet.y - otherPlayer.y);
+                    
+                    if (dist < bullet.radius + 20) { // 20 is player radius
+                        // Hit detected!
+                        if (bullet.ownerId === socket.id) {
+                            // We shot them - tell server
+                            socket.emit('bulletHit', {
+                                shooterId: socket.id,
+                                targetId: playerId,
+                                damage: bullet.damage * 15 // Convert damage to energy loss
+                            });
+                        }
+                        hitSomeone = true;
+                    }
+                });
+                
+                // Check if bullet hit us
+                if (bullet.ownerId !== socket.id && !player.invulnerable) {
+                    const dist = Math.hypot(bullet.x - player.x, bullet.y - player.y);
+                    if (dist < bullet.radius + player.radius) {
+                        // We got hit - tell server
+                        socket.emit('bulletHit', {
+                            shooterId: bullet.ownerId,
+                            targetId: socket.id,
+                            damage: bullet.damage * 15
+                        });
+                        hitSomeone = true;
+                    }
+                }
+                
+                if (hitSomeone) {
                     bullets.splice(i, 1);
                 }
             }
