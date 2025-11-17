@@ -756,8 +756,11 @@
             
             if (player.x - player.radius <= 0 || player.x + player.radius >= ARENA_WIDTH ||
                 player.y - player.radius <= 0 || player.y + player.radius >= ARENA_HEIGHT) {
-                spawnMoneyPickup(player.x, player.y, player.dollarValue);
                 
+                // Tell server we died by wall
+                socket.emit('wallDeath', { x: player.x, y: player.y });
+                
+                // Local respawn (server will sync)
                 player.dollarValue = 1.0;
                 player.energy = player.maxEnergy;
                 player.x = ARENA_WIDTH / 2;

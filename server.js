@@ -98,6 +98,37 @@ io.on('connection', (socket) => {
         }
     });
     
+    // Handle wall death
+    socket.on('wallDeath', (data) => {
+        if (players[socket.id]) {
+            // Drop money
+            const moneyDrop = {
+                x: data.x,
+                y: data.y,
+                amount: players[socket.id].dollarValue,
+                id: Date.now() + Math.random()
+            };
+            moneyPickups.push(moneyDrop);
+            
+            // Respawn player
+            players[socket.id].energy = 100;
+            players[socket.id].dollarValue = 1.0;
+            players[socket.id].x = 800;
+            players[socket.id].y = 600;
+            players[socket.id].velocityX = 0;
+            players[socket.id].velocityY = 0;
+            
+            // Tell everyone
+            io.emit('playerDied', { 
+                playerId: socket.id, 
+                respawn: players[socket.id],
+                moneyDrop: moneyDrop
+            });
+            
+            console.log(`Player ${socket.id} died by wall`);
+        }
+    });
+    
     // Handle money pickup
     socket.on('pickupMoney', (moneyId) => {
         const index = moneyPickups.findIndex(m => m.id === moneyId);
