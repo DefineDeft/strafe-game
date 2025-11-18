@@ -1,20 +1,60 @@
 const express = require('express');
 const app = express();
-const http = require('http').createServer(app);
-const io = require('socket.io')(http, {
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
-    }
-});
 
-const players = {};
-const moneyPickups = [];
+// Set up Express routes FIRST (before Socket.io)
+// This ensures Render gets HTTP responses during cold starts
+
+// Health check endpoint (Render pings this)
+app.get('/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'ok', 
+        players: Object.keys(players).length,
+        uptime: process.uptime() 
+    });
+});
 
 // Serve the HTML file
 app.get('/', (req, res) => {
     res.sendFile(__dirname + '/strafe.html');
 });
+
+// NOW create Socket.io server
+const http = require('http').createServer(app);
+const io = require('socket.io')(http, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    },
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    transports: ['websocket', 'polling'], // Try websocket first, fallback to polling
+    allowEIO3: true
+});
+
+const players = {};
+const moneyPickups = [];
+
+console.log('Server initializing...');
+
+// Clean up disconnected players periodically
+setInterval(() => {
+    const now = Date.now();
+    let cleaned = 0;
+    
+    Object.keys(players).forEach(id => {
+        // Check if socket is actually connected
+        const socket = io.sockets.sockets.get(id);
+        if (!socket || !socket.connected) {
+            console.log(`Cleaning up ghost player: ${id}`);
+            delete players[id];
+            cleaned++;
+        }
+    });
+    
+    if (cleaned > 0) {
+        console.log(`Cleaned ${cleaned} ghost player(s)`);
+    }
+}, 10000); // Check every 10 seconds
 
 io.on('connection', (socket) => {
     console.log('Player connected: ' + socket.id);
@@ -153,7 +193,57 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
-    console.log(`Strafe server running on port ${PORT}`);
-    console.log(`Game available at http://localhost:${PORT}`);
+const server = http.listen(PORT, '0.0.0.0', () => {
+    console.log('=================================');
+    console.log(`✓ Strafe server READY on port ${PORT}`);
+    console.log(`✓ Game available at http://localhost:${PORT}`);
+    console.log(`✓ Health check at http://localhost:${PORT}/health`);
+    console.log('=================================');
+});
+
+// Handle server errors during startup
+server.on('error', (err) => {
+    console.error('Server error:', err);
+    if (err.code === 'EADDRINUSE') {
+        console.error(`Port ${PORT} is already in use`);
+        process.exit(1);
+    }
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, closing server gracefully...');
+    server.close(() => {
+        console.log('Server closed');
+        process.exit(0);
+    });
+    
+    // Force close after 3 seconds if not done
+    setTimeout(() => {
+        console.log('Forcing shutdown...');
+        process.exit(0);
+    }, 3000);
+});
+
+process.on('SIGINT', () => {
+    console.log('SIGINT received (Ctrl+C), closing server...');
+    server.close(() => {
+        console.log('Server closed');
+        process.exit(0);
+    });
+    
+    // Force close after 3 seconds if not done
+    setTimeout(() => {
+        console.log('Forcing shutdown...');
+        process.exit(0);
+    }, 3000);
+});
+
+// Handle uncaught errors
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });

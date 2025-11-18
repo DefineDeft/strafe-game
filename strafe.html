@@ -29,10 +29,37 @@
             border-radius: 5px;
             font-family: Arial;
             font-size: 14px;
+            z-index: 1000;
+        }
+        #loadingScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-family: Arial;
+            z-index: 999;
+        }
+        #loadingScreen h2 {
+            margin: 10px;
+        }
+        #loadingScreen.hidden {
+            display: none;
         }
     </style>
 </head>
 <body>
+    <div id="loadingScreen">
+        <h2>🎮 STRAFE</h2>
+        <p>Connecting to server...</p>
+        <p style="font-size: 12px; color: #888;">Server may be waking up from sleep (30-60s)</p>
+    </div>
     <div id="connectionStatus">Connecting...</div>
     <canvas id="gameCanvas"></canvas>
     
@@ -52,15 +79,57 @@
         const ARENA_HEIGHT = 1200;
         const GRID_SIZE = 50;
         
-        // MULTIPLAYER: Connect to server
-        const socket = io();
+        // MULTIPLAYER: Connect to server with reconnection
+        const socket = io({
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            reconnectionAttempts: Infinity
+        });
         const otherPlayers = {};
         let mySocketId = null;
         
         socket.on('connect', () => {
             mySocketId = socket.id;
+            console.log('Connected to server:', socket.id);
             document.getElementById('connectionStatus').textContent = 'Connected! Players: 1';
             document.getElementById('connectionStatus').style.background = 'rgba(76, 175, 80, 0.8)';
+            document.getElementById('loadingScreen').classList.add('hidden');
+        });
+        
+        socket.on('disconnect', (reason) => {
+            console.log('Disconnected:', reason);
+            document.getElementById('connectionStatus').textContent = 'Disconnected - Reconnecting...';
+            document.getElementById('connectionStatus').style.background = 'rgba(231, 76, 60, 0.8)';
+            document.getElementById('loadingScreen').classList.remove('hidden');
+            
+            // Clear other players when disconnected
+            Object.keys(otherPlayers).forEach(id => delete otherPlayers[id]);
+        });
+        
+        socket.on('reconnect', (attemptNumber) => {
+            console.log('Reconnected after', attemptNumber, 'attempts');
+            document.getElementById('connectionStatus').textContent = 'Reconnected!';
+            document.getElementById('connectionStatus').style.background = 'rgba(76, 175, 80, 0.8)';
+            
+            // Clear other players array on reconnect (server will send fresh data)
+            Object.keys(otherPlayers).forEach(id => delete otherPlayers[id]);
+            updatePlayerCount();
+        });
+        
+        socket.on('reconnect_attempt', (attemptNumber) => {
+            console.log('Reconnection attempt', attemptNumber);
+            document.getElementById('connectionStatus').textContent = `Reconnecting... (${attemptNumber})`;
+        });
+        
+        socket.on('reconnect_error', (error) => {
+            console.log('Reconnection error:', error);
+        });
+        
+        socket.on('connect_error', (error) => {
+            console.log('Connection error:', error);
+            document.getElementById('connectionStatus').textContent = 'Connection error - Retrying...';
+            document.getElementById('connectionStatus').style.background = 'rgba(231, 76, 60, 0.8)';
         });
         
         socket.on('currentPlayers', (players) => {
@@ -150,11 +219,6 @@
         socket.on('playerDisconnected', (playerId) => {
             delete otherPlayers[playerId];
             updatePlayerCount();
-        });
-        
-        socket.on('disconnect', () => {
-            document.getElementById('connectionStatus').textContent = 'Disconnected';
-            document.getElementById('connectionStatus').style.background = 'rgba(231, 76, 60, 0.8)';
         });
         
         function updatePlayerCount() {
