@@ -74,6 +74,7 @@ io.on('connection', (socket) => {
                     x: players[targetId].x,
                     y: players[targetId].y,
                     amount: players[targetId].dollarValue,
+                    radius: 15,
                     id: Date.now() + Math.random()
                 };
                 moneyPickups.push(moneyDrop);
@@ -106,6 +107,7 @@ io.on('connection', (socket) => {
                 x: data.x,
                 y: data.y,
                 amount: players[socket.id].dollarValue,
+                radius: 15,
                 id: Date.now() + Math.random()
             };
             moneyPickups.push(moneyDrop);

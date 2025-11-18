@@ -117,12 +117,22 @@
                 otherPlayers[data.playerId] = data.respawn;
             }
             
-            // Add money drop
-            moneyPickups.push(data.moneyDrop);
+            // Add money drop with proper radius
+            const moneyDrop = {
+                ...data.moneyDrop,
+                radius: MONEY_PICKUP_RADIUS
+            };
+            moneyPickups.push(moneyDrop);
+            console.log('Money dropped:', moneyDrop);
         });
         
         socket.on('currentMoney', (money) => {
-            money.forEach(m => moneyPickups.push(m));
+            money.forEach(m => {
+                moneyPickups.push({
+                    ...m,
+                    radius: MONEY_PICKUP_RADIUS
+                });
+            });
         });
         
         socket.on('moneyPickedUp', (data) => {
