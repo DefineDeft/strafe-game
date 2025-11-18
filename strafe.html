@@ -79,15 +79,26 @@
         const ARENA_HEIGHT = 1200;
         const GRID_SIZE = 50;
         
-        // MULTIPLAYER: Connect to server with reconnection
+        // MULTIPLAYER: Connect to server
         const socket = io({
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionDelayMax: 5000,
-            reconnectionAttempts: Infinity
+            reconnectionAttempts: 5
         });
         const otherPlayers = {};
         let mySocketId = null;
+        
+        // Diagnostics
+        let fps = 60;
+        let ping = 0;
+        let lastFrameTime = performance.now();
+        let frameCount = 0;
+        let lastFpsUpdate = performance.now();
+        
+        // Network rate limiting
+        let lastNetworkUpdate = 0;
+        const NETWORK_TICK_RATE = 50; // Send updates every 50ms (20 times per second)
         
         socket.on('connect', () => {
             mySocketId = socket.id;
@@ -95,7 +106,23 @@
             document.getElementById('connectionStatus').textContent = 'Connected! Players: 1';
             document.getElementById('connectionStatus').style.background = 'rgba(76, 175, 80, 0.8)';
             document.getElementById('loadingScreen').classList.add('hidden');
+            
+            // Measure ping
+            measurePing();
         });
+        
+        // Ping measurement
+        function measurePing() {
+            const startTime = Date.now();
+            socket.emit('ping', startTime);
+        }
+        
+        socket.on('pong', (startTime) => {
+            ping = Date.now() - startTime;
+        });
+        
+        // Measure ping every 2 seconds
+        setInterval(measurePing, 2000);
         
         socket.on('disconnect', (reason) => {
             console.log('Disconnected:', reason);
@@ -111,6 +138,7 @@
             console.log('Reconnected after', attemptNumber, 'attempts');
             document.getElementById('connectionStatus').textContent = 'Reconnected!';
             document.getElementById('connectionStatus').style.background = 'rgba(76, 175, 80, 0.8)';
+            document.getElementById('loadingScreen').classList.add('hidden');
             
             // Clear other players array on reconnect (server will send fresh data)
             Object.keys(otherPlayers).forEach(id => delete otherPlayers[id]);
@@ -754,6 +782,19 @@
                 ctx.fillText(`Streak: ${player.killStreak}`, 120, 45);
             }
             
+            // Diagnostics - bottom left
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(10, canvas.height - 50, 100, 40);
+            
+            ctx.fillStyle = '#0f0';
+            ctx.font = 'bold 14px monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText(`FPS: ${Math.round(fps)}`, 20, canvas.height - 30);
+            
+            const pingColor = ping < 50 ? '#0f0' : ping < 100 ? '#ff0' : '#f00';
+            ctx.fillStyle = pingColor;
+            ctx.fillText(`PING: ${ping}ms`, 20, canvas.height - 15);
+            
             ctx.restore();
         }
         
@@ -973,6 +1014,16 @@
         }
         
         function gameLoop() {
+            // Calculate FPS
+            const currentTime = performance.now();
+            frameCount++;
+            
+            if (currentTime - lastFpsUpdate >= 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                lastFpsUpdate = currentTime;
+            }
+            
             ctx.fillStyle = '#f0f0f0';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
