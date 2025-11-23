@@ -160,8 +160,8 @@ function updatePlayerMovement(player, input, deltaTime) {
     const newX = player.x + player.velocityX * deltaTime;
     const newY = player.y + player.velocityY * deltaTime;
     
-    // Relaxed validation - just check if velocity is reasonable (anti-speed-hack)
-    const currentSpeed = Math.hypot(player.velocityX, player.velocityY);
+    // Double-check velocity is reasonable (anti-speed-hack)
+    // currentSpeed already calculated above at line 152
     if (currentSpeed > GAME_CONFIG.VALIDATION.MAX_SPEED) {
         console.warn(`Player ${player.id} has suspicious velocity: ${currentSpeed.toFixed(2)}`);
         // Cap velocity instead of rejecting the entire input
