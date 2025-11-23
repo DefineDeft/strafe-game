@@ -42,9 +42,8 @@ const GAME_CONFIG = {
     },
     
     VALIDATION: {
-        MAX_SPEED: 10, // Maximum allowed speed (with buffer)
-        MAX_POSITION_DELTA: 15, // Maximum position change per tick
-        INPUT_TIMEOUT: 100 // Ignore inputs older than 100ms
+        MAX_SPEED: 10, // Maximum allowed speed (with buffer for boost)
+        INPUT_TIMEOUT: 200 // Ignore inputs older than 200ms (increased for high ping)
     }
 };
 
@@ -104,11 +103,11 @@ function updatePlayerMovement(player, input, deltaTime) {
         return; // Ignore old inputs
     }
     
-    // Update input sequence (detect packet loss/manipulation)
-    if (input.sequence <= player.inputSequence) {
-        return; // Ignore old/duplicate inputs
+    // Update input sequence (allow some out-of-order tolerance for packet loss)
+    if (input.sequence < player.inputSequence - 5) {
+        return; // Ignore very old inputs (likely duplicate/replayed)
     }
-    player.inputSequence = input.sequence;
+    player.inputSequence = Math.max(input.sequence, player.inputSequence);
     player.lastInputTime = input.timestamp;
     
     // Normalize input vector
@@ -161,11 +160,14 @@ function updatePlayerMovement(player, input, deltaTime) {
     const newX = player.x + player.velocityX * deltaTime;
     const newY = player.y + player.velocityY * deltaTime;
     
-    // Validate position change (anti-teleport)
-    const positionDelta = getDistance(player.x, player.y, newX, newY);
-    if (positionDelta > GAME_CONFIG.VALIDATION.MAX_POSITION_DELTA) {
-        console.warn(`Player ${player.id} tried to move too far: ${positionDelta}`);
-        return; // Reject suspicious movement
+    // Relaxed validation - just check if velocity is reasonable (anti-speed-hack)
+    const currentSpeed = Math.hypot(player.velocityX, player.velocityY);
+    if (currentSpeed > GAME_CONFIG.VALIDATION.MAX_SPEED) {
+        console.warn(`Player ${player.id} has suspicious velocity: ${currentSpeed.toFixed(2)}`);
+        // Cap velocity instead of rejecting the entire input
+        const scale = GAME_CONFIG.VALIDATION.MAX_SPEED / currentSpeed;
+        player.velocityX *= scale;
+        player.velocityY *= scale;
     }
     
     player.x = newX;
@@ -492,6 +494,14 @@ app.get('/health', (req, res) => {
         money: gameState.moneyPickups.length,
         tickRate: GAME_CONFIG.TICK_RATE,
         uptime: process.uptime()
+    });
+});
+
+app.get('/stats', (req, res) => {
+    res.json({
+        players: Object.keys(gameState.players).length,
+        tickRate: GAME_CONFIG.TICK_RATE,
+        region: 'US-EAST'
     });
 });
 
