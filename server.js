@@ -100,12 +100,8 @@ function updatePlayerMovement(player, input, deltaTime) {
         return;
     }
     
-    // Validate input timestamp (prevent replay attacks)
-    const inputAge = Date.now() - input.timestamp;
-    if (inputAge > GAME_CONFIG.VALIDATION.INPUT_TIMEOUT) {
-        console.log(`[REJECT] Player ${player.id.substring(0, 6)} | Input too old: ${inputAge}ms (limit: ${GAME_CONFIG.VALIDATION.INPUT_TIMEOUT}ms)`);
-        return; // Ignore old inputs
-    }
+    // Don't validate timestamp - client/server clocks can be desynced!
+    // Just process the input
     
     // Update input sequence (allow some out-of-order tolerance for packet loss)
     if (input.sequence < player.inputSequence - 5) {
@@ -113,6 +109,7 @@ function updatePlayerMovement(player, input, deltaTime) {
         return; // Ignore very old inputs (likely duplicate/replayed)
     }
     
+    const inputAge = Date.now() - input.timestamp;
     console.log(`[PROCESS] Player ${player.id.substring(0, 6)} | Age: ${inputAge}ms | Seq: ${input.sequence} | Pos: (${player.x.toFixed(1)}, ${player.y.toFixed(1)})`);
     
     player.inputSequence = Math.max(input.sequence, player.inputSequence);
@@ -388,11 +385,18 @@ function gameLoop() {
     gameState.lastTickTime = now;
     gameState.tickCount++;
     
-    // Update all players with their queued inputs
+    // Update all players with their buffered inputs
     Object.values(gameState.players).forEach(player => {
-        if (player.queuedInput) {
-            updatePlayerMovement(player, player.queuedInput, deltaTime);
-            player.queuedInput = null; // Clear after processing
+        if (player.inputBuffer && player.inputBuffer.length > 0) {
+            // Process ALL buffered inputs this tick
+            player.inputBuffer.forEach(input => {
+                updatePlayerMovement(player, input, deltaTime);
+            });
+            
+            console.log(`[TICK] Player ${player.id.substring(0, 6)} | Processed ${player.inputBuffer.length} inputs`);
+            
+            // Clear buffer after processing
+            player.inputBuffer = [];
         } else {
             // No input this tick, apply physics only
             if (gameState.tickCount % 60 === 0) { // Log once per second
@@ -482,8 +486,16 @@ io.on('connection', (socket) => {
             const inputAge = Date.now() - input.timestamp;
             console.log(`[INPUT] Player ${socket.id.substring(0, 6)} | Age: ${inputAge}ms | Seq: ${input.sequence}`);
             
-            // Queue input for next tick
-            player.queuedInput = input;
+            // Buffer inputs instead of overwriting (handle high-ping packet accumulation)
+            if (!player.inputBuffer) {
+                player.inputBuffer = [];
+            }
+            player.inputBuffer.push(input);
+            
+            // Limit buffer size to prevent memory issues
+            if (player.inputBuffer.length > 10) {
+                player.inputBuffer.shift(); // Remove oldest
+            }
         }
     });
     
