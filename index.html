@@ -13,52 +13,28 @@
         
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
             color: white;
             overflow-x: hidden;
-        }
-        
-        .stars {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 0;
-        }
-        
-        .star {
-            position: absolute;
-            background: white;
-            border-radius: 50%;
-            animation: twinkle 3s infinite;
-        }
-        
-        @keyframes twinkle {
-            0%, 100% { opacity: 0.3; }
-            50% { opacity: 1; }
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         
         .container {
-            position: relative;
-            z-index: 1;
-            max-width: 1200px;
+            max-width: 900px;
             margin: 0 auto;
-            padding: 20px;
-        }
-        
-        header {
+            padding: 40px 20px;
             text-align: center;
-            padding: 60px 20px 40px;
         }
         
         .logo {
-            font-size: 96px;
+            font-size: 120px;
             font-weight: 900;
-            letter-spacing: -4px;
+            letter-spacing: -5px;
             text-transform: uppercase;
-            background: linear-gradient(45deg, #00f5ff, #ff00ff, #ffaa00);
+            background: linear-gradient(45deg, #00f5ff, #ff00ff);
             background-size: 200% 200%;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -74,309 +50,219 @@
         }
         
         .tagline {
-            font-size: 24px;
-            opacity: 0.9;
-            margin-bottom: 40px;
-            text-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            font-size: 20px;
+            opacity: 0.8;
+            margin-bottom: 60px;
+            color: #00f5ff;
         }
         
-        .cta-button {
+        .server-info {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-bottom: 60px;
+            flex-wrap: wrap;
+        }
+        
+        .info-box {
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(0, 245, 255, 0.3);
+            border-radius: 15px;
+            padding: 25px 40px;
+            min-width: 200px;
+        }
+        
+        .info-label {
+            font-size: 13px;
+            opacity: 0.6;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+        
+        .info-value {
+            font-size: 32px;
+            font-weight: 900;
+            background: linear-gradient(45deg, #00f5ff, #00f550);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .region {
+            background: linear-gradient(45deg, #ff00ff, #ffaa00);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .play-button {
             display: inline-block;
-            padding: 20px 60px;
-            font-size: 28px;
+            padding: 25px 80px;
+            font-size: 24px;
             font-weight: bold;
             text-decoration: none;
             color: white;
-            background: linear-gradient(45deg, #ff006e, #8338ec);
+            background: linear-gradient(45deg, #00f5ff, #ff00ff);
             border-radius: 50px;
-            box-shadow: 0 10px 40px rgba(255, 0, 110, 0.4);
+            box-shadow: 0 10px 40px rgba(0, 245, 255, 0.4);
             transition: all 0.3s ease;
-            border: 3px solid rgba(255, 255, 255, 0.3);
+            border: 3px solid rgba(255, 255, 255, 0.2);
             text-transform: uppercase;
-            letter-spacing: 2px;
+            letter-spacing: 3px;
             animation: pulse 2s infinite;
+            margin-bottom: 80px;
         }
         
         @keyframes pulse {
             0%, 100% {
                 transform: scale(1);
-                box-shadow: 0 10px 40px rgba(255, 0, 110, 0.4);
+                box-shadow: 0 10px 40px rgba(0, 245, 255, 0.4);
             }
             50% {
                 transform: scale(1.05);
-                box-shadow: 0 15px 60px rgba(255, 0, 110, 0.6);
+                box-shadow: 0 15px 60px rgba(0, 245, 255, 0.6);
             }
         }
         
-        .cta-button:hover {
+        .play-button:hover {
             transform: scale(1.1) !important;
-            box-shadow: 0 20px 80px rgba(255, 0, 110, 0.8) !important;
+            box-shadow: 0 20px 80px rgba(0, 245, 255, 0.8) !important;
         }
         
         .features {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 30px;
-            margin: 60px 0;
-            padding: 0 20px;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 60px;
         }
         
         .feature {
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(0, 0, 0, 0.4);
             backdrop-filter: blur(10px);
-            border: 2px solid rgba(255, 255, 255, 0.2);
-            border-radius: 20px;
-            padding: 30px;
-            text-align: center;
-            transition: all 0.3s ease;
-        }
-        
-        .feature:hover {
-            transform: translateY(-10px);
-            background: rgba(255, 255, 255, 0.15);
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
-        }
-        
-        .feature-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
-            filter: drop-shadow(0 0 20px currentColor);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
         }
         
         .feature h3 {
-            font-size: 24px;
-            margin-bottom: 15px;
+            font-size: 18px;
+            margin-bottom: 10px;
             color: #00f5ff;
         }
         
         .feature p {
-            opacity: 0.85;
+            opacity: 0.7;
+            font-size: 14px;
             line-height: 1.6;
         }
         
-        .stats {
-            display: flex;
-            justify-content: space-around;
-            flex-wrap: wrap;
-            gap: 40px;
-            margin: 80px 0;
-            padding: 40px;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 30px;
-        }
-        
-        .stat {
-            text-align: center;
-        }
-        
-        .stat-number {
-            font-size: 64px;
-            font-weight: 900;
-            background: linear-gradient(45deg, #00f5ff, #ff00ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 10px;
-        }
-        
-        .stat-label {
-            font-size: 18px;
-            opacity: 0.8;
-            text-transform: uppercase;
-            letter-spacing: 2px;
-        }
-        
-        .gameplay-preview {
-            margin: 80px 0;
-            text-align: center;
-        }
-        
-        .gameplay-preview h2 {
-            font-size: 48px;
-            margin-bottom: 40px;
-            text-shadow: 0 0 20px rgba(0, 245, 255, 0.5);
-        }
-        
-        .preview-box {
-            background: rgba(0, 0, 0, 0.3);
-            border: 3px solid rgba(255, 255, 255, 0.2);
+        .controls {
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(0, 245, 255, 0.3);
             border-radius: 20px;
             padding: 40px;
-            backdrop-filter: blur(10px);
+            margin-bottom: 40px;
         }
         
-        .controls {
+        .controls h2 {
+            font-size: 28px;
+            margin-bottom: 30px;
+            color: #00f5ff;
+        }
+        
+        .control-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
-            margin-top: 40px;
         }
         
         .control-item {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 20px;
-            border-radius: 15px;
-            border: 2px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
         
         .control-key {
             display: inline-block;
-            background: rgba(0, 0, 0, 0.5);
-            padding: 10px 20px;
+            background: rgba(0, 245, 255, 0.2);
+            padding: 8px 16px;
             border-radius: 8px;
             font-weight: bold;
-            font-size: 18px;
-            margin-right: 10px;
-            border: 2px solid rgba(255, 255, 255, 0.3);
+            font-size: 14px;
+            margin-bottom: 8px;
+            border: 2px solid rgba(0, 245, 255, 0.4);
             color: #00f5ff;
+        }
+        
+        .control-desc {
+            font-size: 13px;
+            opacity: 0.7;
         }
         
         footer {
             text-align: center;
-            padding: 60px 20px;
-            opacity: 0.7;
-            font-size: 14px;
+            padding: 40px 20px;
+            opacity: 0.5;
+            font-size: 13px;
         }
         
         @media (max-width: 768px) {
             .logo {
-                font-size: 64px;
+                font-size: 72px;
             }
             
             .tagline {
-                font-size: 18px;
+                font-size: 16px;
             }
             
-            .cta-button {
-                padding: 15px 40px;
+            .play-button {
+                padding: 20px 50px;
                 font-size: 20px;
             }
             
-            .stat-number {
-                font-size: 48px;
+            .info-value {
+                font-size: 24px;
             }
         }
     </style>
 </head>
 <body>
-    <div class="stars" id="stars"></div>
-    
     <div class="container">
-        <header>
-            <h1 class="logo">STRAFE</h1>
-            <p class="tagline">⚡ Server-Authoritative Multiplayer Tank Arena ⚡</p>
-            <a href="/game" class="cta-button">🎮 PLAY NOW 🎮</a>
-        </header>
+        <h1 class="logo">STRAFE</h1>
+        <p class="tagline">Multiplayer Tank Arena</p>
         
-        <div class="stats">
-            <div class="stat">
-                <div class="stat-number">60</div>
-                <div class="stat-label">Tick Rate</div>
+        <div class="server-info">
+            <div class="info-box">
+                <div class="info-label">Players Online</div>
+                <div class="info-value" id="playerCount">--</div>
             </div>
-            <div class="stat">
-                <div class="stat-number">∞</div>
-                <div class="stat-label">Players</div>
-            </div>
-            <div class="stat">
-                <div class="stat-number">0</div>
-                <div class="stat-label">Cheaters</div>
+            <div class="info-box">
+                <div class="info-label">Region</div>
+                <div class="info-value region">US-EAST</div>
             </div>
         </div>
         
-        <div class="features">
-            <div class="feature">
-                <div class="feature-icon">🛡️</div>
-                <h3>Cheat-Proof</h3>
-                <p>Server-authoritative architecture prevents speed hacking, teleporting, and manipulation</p>
-            </div>
-            
-            <div class="feature">
-                <div class="feature-icon">⚡</div>
-                <h3>Ultra-Smooth</h3>
-                <p>Client-side prediction and entity interpolation for buttery 60+ FPS gameplay</p>
-            </div>
-            
-            <div class="feature">
-                <div class="feature-icon">🌐</div>
-                <h3>Browser-Based</h3>
-                <p>No downloads. No installs. Just click and play from any device</p>
-            </div>
-            
-            <div class="feature">
-                <div class="feature-icon">💰</div>
-                <h3>Risk & Reward</h3>
-                <p>Build your cash value with kills. Die to walls or enemies and drop it all</p>
-            </div>
-            
-            <div class="feature">
-                <div class="feature-icon">🔫</div>
-                <h3>Charged Shots</h3>
-                <p>Hold to charge devastating attacks. Master timing for maximum damage</p>
-            </div>
-            
-            <div class="feature">
-                <div class="feature-icon">🏆</div>
-                <h3>Bounty System</h3>
-                <p>Build kill streaks for multipliers. Become a high-value target</p>
-            </div>
-        </div>
-        
-        <div class="gameplay-preview">
-            <h2>⌨️ Controls</h2>
-            <div class="preview-box">
-                <div class="controls">
-                    <div class="control-item">
-                        <span class="control-key">WASD</span>
-                        <span>Move your tank</span>
-                    </div>
-                    <div class="control-item">
-                        <span class="control-key">MOUSE</span>
-                        <span>Aim your turret</span>
-                    </div>
-                    <div class="control-item">
-                        <span class="control-key">CLICK</span>
-                        <span>Shoot (hold to charge)</span>
-                    </div>
-                    <div class="control-item">
-                        <span class="control-key">SPACE</span>
-                        <span>Boost (drains energy)</span>
-                    </div>
-                </div>
-                
-                <div style="margin-top: 40px; padding-top: 30px; border-top: 2px solid rgba(255,255,255,0.2);">
-                    <h3 style="font-size: 24px; margin-bottom: 20px; color: #ff00ff;">💡 Pro Tips</h3>
-                    <p style="opacity: 0.85; line-height: 1.8; max-width: 800px; margin: 0 auto;">
-                        • Touch arena walls and you die instantly<br>
-                        • Charge shots deal more damage but cost more energy<br>
-                        • Collect money from kills to increase your value<br>
-                        • Higher kill streaks = bigger bounty on your head<br>
-                        • Energy regenerates over time - manage it wisely
-                    </p>
-                </div>
-            </div>
-        </div>
-        
-        <div style="text-align: center; margin: 80px 0;">
-            <a href="/game" class="cta-button">🚀 ENTER THE ARENA 🚀</a>
-        </div>
-        
-        <footer>
-            <p>Built with Socket.IO • Node.js • HTML5 Canvas</p>
-            <p style="margin-top: 10px;">Server-authoritative netcode @ 60 TPS</p>
-        </footer>
+        <a href="/game" class="play-button">PLAY NOW</a>
+		
     </div>
     
     <script>
-        // Generate random stars
-        const starsContainer = document.getElementById('stars');
-        for (let i = 0; i < 100; i++) {
-            const star = document.createElement('div');
-            star.className = 'star';
-            star.style.left = Math.random() * 100 + '%';
-            star.style.top = Math.random() * 100 + '%';
-            star.style.width = star.style.height = Math.random() * 3 + 'px';
-            star.style.animationDelay = Math.random() * 3 + 's';
-            starsContainer.appendChild(star);
+        // Fetch player count from server
+        async function updatePlayerCount() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                document.getElementById('playerCount').textContent = data.players || 0;
+            } catch (error) {
+                document.getElementById('playerCount').textContent = '0';
+            }
         }
+        
+        // Update every 5 seconds
+        updatePlayerCount();
+        setInterval(updatePlayerCount, 5000);
     </script>
 </body>
 </html>
