@@ -166,7 +166,6 @@
             bullets: {},
             money: {},
             inputSequence: 0,
-            pendingInputs: [],
             camera: { x: 0, y: 0 },
             ping: 0,
             fps: 60,
@@ -281,7 +280,7 @@
             });
             
             data.gameState.bullets.forEach(b => {
-                game.bullets[b.id] = { ...b, renderX: b.x, renderY: b.y, prevX: b.x, prevY: b.y };
+                game.bullets[b.id] = { ...b, renderX: b.x, renderY: b.y };
             });
             
             data.gameState.money.forEach(m => {
@@ -297,7 +296,40 @@
             
             snapshot.players.forEach(serverPlayer => {
                 if (serverPlayer.id === game.myId) {
-                    reconcileServerState(serverPlayer);
+                    // Calculate prediction error
+                    const errorX = serverPlayer.x - game.player.x;
+                    const errorY = serverPlayer.y - game.player.y;
+                    const errorDist = Math.hypot(errorX, errorY);
+                    
+                    // Tiered reconciliation based on error size
+                    if (errorDist < 5) {
+                        // Tiny error - very gentle correction
+                        game.player.x += errorX * 0.1;
+                        game.player.y += errorY * 0.1;
+                    } else if (errorDist < 15) {
+                        // Small error - normal correction
+                        game.player.x += errorX * 0.3;
+                        game.player.y += errorY * 0.3;
+                    } else if (errorDist < 40) {
+                        // Medium error - faster correction
+                        game.player.x += errorX * 0.6;
+                        game.player.y += errorY * 0.6;
+                    } else {
+                        // Big error (>40px = player width) - snap to server
+                        console.warn(`Large position error: ${errorDist.toFixed(1)}px - snapping to server`);
+                        game.player.x = serverPlayer.x;
+                        game.player.y = serverPlayer.y;
+                        game.player.velocityX = serverPlayer.velocityX;
+                        game.player.velocityY = serverPlayer.velocityY;
+                    }
+                    
+                    // Always trust server for these
+                    game.player.energy = serverPlayer.energy;
+                    game.player.dollarValue = serverPlayer.dollarValue;
+                    game.player.invulnerable = serverPlayer.invulnerable;
+                    game.player.invulnerableTicksRemaining = serverPlayer.invulnerableTicksRemaining;
+                    game.player.killStreak = serverPlayer.killStreak;
+                    game.player.bountyMultiplier = serverPlayer.bountyMultiplier;
                 } else {
                     if (!game.otherPlayers[serverPlayer.id]) {
                         game.otherPlayers[serverPlayer.id] = {
@@ -307,8 +339,6 @@
                         };
                     } else {
                         const player = game.otherPlayers[serverPlayer.id];
-                        player.prevX = player.x;
-                        player.prevY = player.y;
                         Object.assign(player, serverPlayer);
                         if (player.renderX === undefined) {
                             player.renderX = player.x;
@@ -327,24 +357,59 @@
             const newBullets = {};
             snapshot.bullets.forEach(b => {
                 if (game.bullets[b.id]) {
+                    // Update existing bullet from server
                     const bullet = game.bullets[b.id];
-                    bullet.prevX = bullet.x;
-                    bullet.prevY = bullet.y;
-                    Object.assign(bullet, b);
+                    
+                    // Gently correct renderX/renderY if they've drifted from server
+                    const errorX = b.x - bullet.renderX;
+                    const errorY = b.y - bullet.renderY;
+                    const errorDist = Math.hypot(errorX, errorY);
+                    
+                    // If error is small, smoothly correct. If large, snap.
+                    if (errorDist < 20) {
+                        bullet.renderX += errorX * 0.3;
+                        bullet.renderY += errorY * 0.3;
+                    } else {
+                        // Large error - snap to server position
+                        bullet.renderX = b.x;
+                        bullet.renderY = b.y;
+                    }
+                    
+                    // Always trust server for actual position and velocity
+                    bullet.x = b.x;
+                    bullet.y = b.y;
+                    bullet.vx = b.vx;
+                    bullet.vy = b.vy;
+                    newBullets[b.id] = bullet;
                 } else {
+                    // New bullet from server - initialize with current position
                     newBullets[b.id] = {
                         ...b,
                         renderX: b.x,
-                        renderY: b.y,
-                        prevX: b.x,
-                        prevY: b.y
+                        renderY: b.y
                     };
                 }
             });
             
+            // Remove predicted bullets when server version arrives or they're old
             Object.keys(game.bullets).forEach(id => {
-                if (snapshot.bullets.find(b => b.id === id)) {
-                    newBullets[id] = game.bullets[id];
+                const bullet = game.bullets[id];
+                if (bullet.isPredicted) {
+                    // Check if server has confirmed this bullet (same owner, similar position)
+                    const serverConfirmed = snapshot.bullets.some(sb => 
+                        sb.ownerId === bullet.ownerId && 
+                        Math.hypot(sb.x - bullet.x, sb.y - bullet.y) < 50
+                    );
+                    if (!serverConfirmed && Date.now() - parseInt(id.split('_')[2]) < 200) {
+                        // Keep predicted bullet for a bit if not confirmed yet
+                        newBullets[id] = bullet;
+                    }
+                    // Otherwise discard the predicted bullet
+                } else if (snapshot.bullets.find(b => b.id === id)) {
+                    // Keep non-predicted bullets that still exist on server
+                    if (!newBullets[id]) {
+                        newBullets[id] = game.bullets[id];
+                    }
                 }
             });
             
@@ -365,9 +430,7 @@
             game.bullets[bullet.id] = {
                 ...bullet,
                 renderX: bullet.x,
-                renderY: bullet.y,
-                prevX: bullet.x,
-                prevY: bullet.y
+                renderY: bullet.y
             };
         });
         
@@ -378,7 +441,6 @@
         socket.on('playerHit', (data) => {
             if (data.targetId === game.myId) {
                 game.player.energy = data.energy;
-                // Hit effect on ourselves
                 if (game.player) {
                     createHitEffect(game.player.x, game.player.y, '#ff006e');
                 }
@@ -398,15 +460,13 @@
                 game.player.energy = data.respawn.energy;
                 game.player.dollarValue = data.respawn.dollarValue;
                 game.player.invulnerable = true;
-                game.player.invulnerableUntil = data.respawn.invulnerableUntil;
+                game.player.invulnerableTicksRemaining = data.respawn.invulnerableTicksRemaining;
                 game.player.killStreak = 0;
                 game.player.bountyMultiplier = 1.0;
-                game.pendingInputs = [];
             }
             
             if (data.moneyDrop) {
                 game.money[data.moneyDrop.id] = data.moneyDrop;
-                // Death explosion
                 createHitEffect(data.moneyDrop.x, data.moneyDrop.y, '#FFD700');
             }
         });
@@ -451,56 +511,6 @@
             const status = document.getElementById('connectionStatus');
             status.textContent = text;
             status.className = className;
-        }
-        
-        // ==================== SERVER RECONCILIATION ====================
-        function reconcileServerState(serverPlayer) {
-            if (!game.player) return;
-            
-            const errorX = serverPlayer.x - game.player.x;
-            const errorY = serverPlayer.y - game.player.y;
-            const errorDistance = Math.hypot(errorX, errorY);
-            
-            // Store for debugging
-            game.player.predictionError = errorDistance;
-            
-            // Much more tolerant reconciliation for laggy connections
-            if (errorDistance < 15) {
-                // Small error - very gentle correction (works well up to 100ms ping)
-                game.player.x += errorX * 0.05;
-                game.player.y += errorY * 0.05;
-            } else if (errorDistance < 50) {
-                // Medium error - moderate correction
-                game.player.x += errorX * 0.15;
-                game.player.y += errorY * 0.15;
-            } else if (errorDistance < 100) {
-                // Large error - faster correction but still smooth
-                game.player.x += errorX * 0.4;
-                game.player.y += errorY * 0.4;
-            } else {
-                // Huge error - something is very wrong, snap to server
-                console.warn('Massive position error:', errorDistance, 'snapping to server');
-                game.player.x = serverPlayer.x;
-                game.player.y = serverPlayer.y;
-                game.player.velocityX = serverPlayer.velocityX;
-                game.player.velocityY = serverPlayer.velocityY;
-            }
-            
-            // Always trust server for these values
-            game.player.energy = serverPlayer.energy;
-            game.player.dollarValue = serverPlayer.dollarValue;
-            game.player.invulnerable = serverPlayer.invulnerable;
-            game.player.killStreak = serverPlayer.killStreak;
-            game.player.bountyMultiplier = serverPlayer.bountyMultiplier;
-            
-            // Fix invulnerability - use server's timestamp directly
-            if (serverPlayer.invulnerableUntil) {
-                game.player.invulnerableUntil = serverPlayer.invulnerableUntil;
-            }
-            
-            if (game.pendingInputs.length > 10) {
-                game.pendingInputs = game.pendingInputs.slice(-5);
-            }
         }
         
         // ==================== INPUT HANDLING ====================
@@ -559,10 +569,26 @@
             
             game.player.energy -= bulletType.energyCost;
             
-            socket.emit('shoot', {
+            // CLIENT-SIDE PREDICTION: Spawn bullet locally immediately
+            const barrelLength = 35; // Match the visual barrel length
+            const predictedBullet = {
+                id: `predicted_${game.myId}_${Date.now()}_${Math.random()}`,
+                x: game.player.x + Math.cos(game.player.angle) * barrelLength,
+                y: game.player.y + Math.sin(game.player.angle) * barrelLength,
+                vx: Math.cos(game.player.angle) * bulletType.speed,
+                vy: Math.sin(game.player.angle) * bulletType.speed,
+                radius: bulletType.radius,
+                damage: bulletType.damage,
+                ownerId: game.myId,
                 chargeLevel: chargeLevel,
-                timestamp: Date.now()
-            });
+                renderX: game.player.x + Math.cos(game.player.angle) * barrelLength,
+                renderY: game.player.y + Math.sin(game.player.angle) * barrelLength,
+                isPredicted: true
+            };
+            
+            game.bullets[predictedBullet.id] = predictedBullet;
+            
+            socket.emit('shoot', { chargeLevel: chargeLevel });
         }
         
         function getChargeLevel() {
@@ -573,13 +599,12 @@
             return 0;
         }
         
-        // ==================== CLIENT PREDICTION ====================
+        // ==================== CLIENT PREDICTION (FIXED TIMESTEP) ====================
         function processInput(deltaTime) {
             if (!game.player || !game.connected) return;
             
             const input = {
                 sequence: game.inputSequence++,
-                timestamp: Date.now(),
                 up: keys['w'] || keys['arrowup'],
                 down: keys['s'] || keys['arrowdown'],
                 left: keys['a'] || keys['arrowleft'],
@@ -591,13 +616,7 @@
                 )
             };
             
-            // Debug log (only log every 60 frames = once per second at 60fps)
-            if (game.inputSequence % 60 === 0) {
-                console.log(`[CLIENT] Sending input | Seq: ${input.sequence} | Time: ${input.timestamp}`);
-            }
-            
             socket.emit('input', input);
-            game.pendingInputs.push(input);
             applyInput(game.player, input, deltaTime);
             
             // Boost trail effect
@@ -608,6 +627,7 @@
             }
         }
         
+        // FIXED: Added deltaTime parameter properly
         function applyInput(player, input, deltaTime) {
             if (!game.config) return;
             
@@ -619,20 +639,24 @@
             if (input.left) inputX -= 1;
             if (input.right) inputX += 1;
             
+            // Normalize diagonal movement
             if (inputX !== 0 && inputY !== 0) {
                 const length = Math.hypot(inputX, inputY);
                 inputX /= length;
                 inputY /= length;
             }
             
+            // Apply acceleration
             const accel = game.config.PLAYER.ACCELERATION * deltaTime;
             player.velocityX += inputX * accel;
             player.velocityY += inputY * accel;
             
+            // Apply momentum/friction
             const momentum = Math.pow(game.config.PLAYER.MOMENTUM, deltaTime);
             player.velocityX *= momentum;
             player.velocityY *= momentum;
             
+            // Handle boost
             const isBoosting = input.boost && player.energy > 0;
             if (isBoosting) {
                 player.energy = Math.max(0, player.energy - game.config.PLAYER.ENERGY.BOOST_DRAIN * deltaTime);
@@ -643,6 +667,7 @@
                 );
             }
             
+            // Cap velocity
             const maxVel = isBoosting ? game.config.PLAYER.MAX_BOOST_VELOCITY : game.config.PLAYER.MAX_VELOCITY;
             const speed = Math.hypot(player.velocityX, player.velocityY);
             if (speed > maxVel) {
@@ -650,38 +675,46 @@
                 player.velocityY = (player.velocityY / speed) * maxVel;
             }
             
+            // Update position
             player.x += player.velocityX * deltaTime;
             player.y += player.velocityY * deltaTime;
             player.angle = input.angle;
-            
-            // Don't update invulnerability here - let server handle it
-            // The reconciliation will sync it from server state
         }
         
         // ==================== INTERPOLATION ====================
         function interpolateEntities(alpha) {
-            // Slower interpolation for smoother movement on laggy connections
-            const lerpFactor = Math.min(alpha, 0.25); // Cap at 25% to prevent jitter
+            const lerpFactor = 0.2;
             
+            // Only interpolate other players (they have unpredictable movement)
             Object.values(game.otherPlayers).forEach(player => {
-                if (player.prevX !== undefined) {
-                    player.renderX += (player.x - player.renderX) * lerpFactor;
-                    player.renderY += (player.y - player.renderY) * lerpFactor;
-                } else {
-                    player.renderX = player.x;
-                    player.renderY = player.y;
-                }
+                player.renderX += (player.x - player.renderX) * lerpFactor;
+                player.renderY += (player.y - player.renderY) * lerpFactor;
             });
             
+            // Bullets are extrapolated in updatePredictedBullets, not interpolated
+        }
+        
+        function updateParticles(deltaTime) {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                if (!particles[i].update(deltaTime)) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+        
+        function updatePredictedBullets(deltaTime) {
+            // Move ALL bullets on client using their velocity (extrapolation)
             Object.values(game.bullets).forEach(bullet => {
-                if (bullet.prevX !== undefined) {
-                    // Bullets move fast, use slightly higher lerp
-                    const bulletLerp = Math.min(alpha, 0.4);
-                    bullet.renderX += (bullet.x - bullet.renderX) * bulletLerp;
-                    bullet.renderY += (bullet.y - bullet.renderY) * bulletLerp;
-                } else {
-                    bullet.renderX = bullet.x;
-                    bullet.renderY = bullet.y;
+                if (bullet.vx !== undefined && bullet.vy !== undefined) {
+                    // Extrapolate bullet position every frame at constant velocity
+                    bullet.renderX += bullet.vx * deltaTime;
+                    bullet.renderY += bullet.vy * deltaTime;
+                    
+                    // For predicted bullets, also update actual position
+                    if (bullet.isPredicted) {
+                        bullet.x += bullet.vx * deltaTime;
+                        bullet.y += bullet.vy * deltaTime;
+                    }
                 }
             });
         }
@@ -795,52 +828,66 @@
             ctx.translate(screenX, screenY);
             ctx.rotate(player.angle);
             
-            ctx.shadowBlur = 10;
+            const barrelLength = 35;
+            const barrelWidth = 12;
+            
+            ctx.shadowBlur = 15;
             ctx.shadowColor = color;
             ctx.fillStyle = color;
-            ctx.fillRect(10, -7.5, 35, 15);
+            ctx.fillRect(0, -barrelWidth/2, barrelLength, barrelWidth);
             ctx.shadowBlur = 0;
+            
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.fillRect(barrelLength - 8, -barrelWidth/2 + 2, 6, barrelWidth - 4);
             
             ctx.restore();
             
-            // Draw body with glow
+            // Draw body
             ctx.beginPath();
-            ctx.arc(screenX, screenY, 20, 0, Math.PI * 2);
-            ctx.fillStyle = color;
-            ctx.shadowBlur = 15;
+            ctx.arc(screenX, screenY, game.config.PLAYER.RADIUS, 0, Math.PI * 2);
+            
+            const gradient = ctx.createRadialGradient(
+                screenX - 5, screenY - 5, 0,
+                screenX, screenY, game.config.PLAYER.RADIUS
+            );
+            gradient.addColorStop(0, color);
+            gradient.addColorStop(1, color.replace('ff', '88'));
+            ctx.fillStyle = gradient;
+            ctx.shadowBlur = 20;
             ctx.shadowColor = color;
             ctx.fill();
             ctx.shadowBlur = 0;
             
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.lineWidth = 3;
             ctx.stroke();
             
-            // Draw dollar value with better styling
-            const gradient = ctx.createLinearGradient(screenX - 30, screenY - 35, screenX + 30, screenY - 35);
-            gradient.addColorStop(0, '#FFD700');
-            gradient.addColorStop(1, '#FFA500');
-            
-            ctx.font = 'bold 16px Arial';
-            ctx.textAlign = 'center';
-            ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-            ctx.lineWidth = 4;
-            ctx.strokeText(`$${player.dollarValue.toFixed(2)}`, screenX, screenY - 35);
-            ctx.fillStyle = gradient;
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = '#FFD700';
-            ctx.fillText(`$${player.dollarValue.toFixed(2)}`, screenX, screenY - 35);
-            ctx.shadowBlur = 0;
+            // Energy indicator ring
+            if (player.energy < 100) {
+                const energyAngle = (player.energy / 100) * Math.PI * 2 - Math.PI / 2;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, game.config.PLAYER.RADIUS + 4, -Math.PI / 2, energyAngle);
+                let energyColor;
+                if (player.energy >= 70) energyColor = '#00f550';
+                else if (player.energy >= 30) energyColor = '#ffaa00';
+                else energyColor = '#ff006e';
+                ctx.strokeStyle = energyColor;
+                ctx.lineWidth = 3;
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = energyColor;
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+            }
         }
         
         function drawOtherPlayers() {
             Object.values(game.otherPlayers).forEach(player => {
-                const renderPlayer = {
+                const displayPlayer = {
                     ...player,
                     x: player.renderX,
                     y: player.renderY
                 };
-                drawPlayer(renderPlayer, '#ff00ff', false);
+                drawPlayer(displayPlayer, '#ffaa00', false);
             });
         }
         
@@ -895,14 +942,10 @@
             });
         }
         
-        function drawParticles(deltaTime) {
-            for (let i = particles.length - 1; i >= 0; i--) {
-                if (!particles[i].update(deltaTime)) {
-                    particles.splice(i, 1);
-                } else {
-                    particles[i].draw(game.camera);
-                }
-            }
+        function drawParticles() {
+            particles.forEach(particle => {
+                particle.draw(game.camera);
+            });
         }
         
         function drawUI() {
@@ -911,7 +954,7 @@
             ctx.save();
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             
-            // Energy bar - glassmorphic style
+            // Energy bar
             const barBg = ctx.createLinearGradient(20, 20, 20, 130);
             barBg.addColorStop(0, 'rgba(0, 0, 0, 0.6)');
             barBg.addColorStop(1, 'rgba(0, 0, 0, 0.4)');
@@ -983,16 +1026,16 @@
                 ctx.shadowBlur = 0;
             }
             
-            // Debug info - bottom left
-            const debugBg = ctx.createLinearGradient(10, canvas.height - 80, 10, canvas.height - 10);
+            // Debug info
+            const debugBg = ctx.createLinearGradient(10, canvas.height - 60, 10, canvas.height - 10);
             debugBg.addColorStop(0, 'rgba(0, 0, 0, 0.7)');
             debugBg.addColorStop(1, 'rgba(0, 0, 0, 0.5)');
             
             ctx.fillStyle = debugBg;
-            ctx.fillRect(10, canvas.height - 95, 160, 85);
+            ctx.fillRect(10, canvas.height - 75, 160, 65);
             ctx.strokeStyle = 'rgba(0, 245, 255, 0.2)';
             ctx.lineWidth = 2;
-            ctx.strokeRect(10, canvas.height - 95, 160, 85);
+            ctx.strokeRect(10, canvas.height - 75, 160, 65);
             
             ctx.font = 'bold 13px monospace';
             ctx.textAlign = 'left';
@@ -1000,47 +1043,23 @@
             ctx.fillStyle = '#00f550';
             ctx.shadowBlur = 5;
             ctx.shadowColor = '#00f550';
-            ctx.fillText(`FPS: ${Math.round(game.fps)}`, 20, canvas.height - 70);
+            ctx.fillText(`FPS: ${Math.round(game.fps)}`, 20, canvas.height - 53);
             
             const pingColor = game.ping < 50 ? '#00f550' : game.ping < 100 ? '#ffaa00' : '#ff006e';
             ctx.fillStyle = pingColor;
             ctx.shadowColor = pingColor;
-            ctx.fillText(`PING: ${game.ping}ms`, 20, canvas.height - 53);
+            ctx.fillText(`PING: ${game.ping}ms`, 20, canvas.height - 36);
             
             ctx.fillStyle = '#00f5ff';
             ctx.shadowColor = '#00f5ff';
-            ctx.fillText(`TICK: ${game.serverTick}`, 20, canvas.height - 36);
-            
-            // Show prediction error for debugging
-            if (game.player) {
-                const predictionError = game.player.predictionError || 0;
-                const errorColor = predictionError < 10 ? '#00f550' : predictionError < 30 ? '#ffaa00' : '#ff006e';
-                ctx.fillStyle = errorColor;
-                ctx.shadowColor = errorColor;
-                ctx.fillText(`ERR: ${predictionError.toFixed(1)}`, 20, canvas.height - 19);
-            }
+            ctx.fillText(`TICK: ${game.serverTick}`, 20, canvas.height - 19);
             
             ctx.shadowBlur = 0;
             
             ctx.restore();
         }
         
-        // ==================== MAIN LOOP ====================
-        function gameLoop(currentTime) {
-            frameCount++;
-            if (currentTime - lastFpsUpdate >= 1000) {
-                game.fps = frameCount;
-                frameCount = 0;
-                lastFpsUpdate = currentTime;
-            }
-            
-            const deltaTime = Math.min((currentTime - lastFrameTime) / (1000 / 60), 3);
-            lastFrameTime = currentTime;
-            
-            processInput(deltaTime);
-            interpolateEntities(0.2);
-            updateCamera();
-            
+        function render() {
             // Dark background with gradient
             const bgGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
             bgGradient.addColorStop(0, '#0a0e27');
@@ -1051,7 +1070,7 @@
             drawGrid();
             drawBorders();
             drawMoney();
-            drawParticles(deltaTime);
+            drawParticles();
             drawBullets();
             drawOtherPlayers();
             
@@ -1060,6 +1079,34 @@
             }
             
             drawUI();
+        }
+        
+        // ==================== MAIN LOOP (FIXED TIMESTEP) ====================
+        function gameLoop(currentTime) {
+            // FPS counter
+            frameCount++;
+            if (currentTime - lastFpsUpdate >= 1000) {
+                game.fps = frameCount;
+                frameCount = 0;
+                lastFpsUpdate = currentTime;
+            }
+            
+            // Calculate delta time normalized to match server (60Hz baseline = 1.0)
+            const rawDelta = (currentTime - lastFrameTime);
+            const deltaTime = rawDelta / (1000 / 60);
+            lastFrameTime = currentTime;
+            
+            // Run physics at native framerate but normalized to server
+            processInput(deltaTime);
+            updateParticles(deltaTime);
+            updatePredictedBullets(deltaTime);
+            
+            // Interpolate other entities
+            interpolateEntities(0.2);
+            updateCamera();
+            
+            // Render
+            render();
             
             requestAnimationFrame(gameLoop);
         }

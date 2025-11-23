@@ -29,7 +29,7 @@ const GAME_CONFIG = {
             BOOST_DRAIN: 0.3
         },
         
-        INVULNERABLE_DURATION: 2000
+        INVULNERABLE_TICKS: 120 // 2 seconds at 60 TPS
     },
     
     BULLET: {
@@ -38,7 +38,7 @@ const GAME_CONFIG = {
             CHARGED1: { speed: 7, radius: 12, damage: 30, energyCost: 10 },
             CHARGED2: { speed: 8, radius: 16, damage: 45, energyCost: 15 }
         },
-        MAX_LIFETIME: 5000 // 5 seconds
+        MAX_LIFETIME_TICKS: 300 // 5 seconds at 60 TPS
     },
     
     VALIDATION: {
@@ -51,8 +51,8 @@ const gameState = {
     players: {},
     bullets: [],
     moneyPickups: [],
-    lastTickTime: Date.now(),
-    tickCount: 0
+    tickCount: 0,
+    inputBuffers: {} // NEW: Store inputs per player
 };
 
 // ==================== UTILITY FUNCTIONS ====================
@@ -82,23 +82,21 @@ function spawnPlayer(socketId) {
         energy: GAME_CONFIG.PLAYER.ENERGY.MAX,
         dollarValue: 1.0,
         invulnerable: true,
-        invulnerableUntil: Date.now() + GAME_CONFIG.PLAYER.INVULNERABLE_DURATION,
+        invulnerableTicksRemaining: GAME_CONFIG.PLAYER.INVULNERABLE_TICKS,
         killStreak: 0,
         bountyMultiplier: 1.0,
-        inputSequence: 0
+        lastProcessedSequence: -1,
+        currentInput: null, // Store most recent input
+        isBoosting: false
     };
 }
 
 // ==================== PHYSICS & MOVEMENT ====================
-function updatePlayerMovement(player, input, deltaTime) {
-    if (!input) return;
+function processPlayerInput(player, input) {
+    if (!input || !player) return;
     
-    // Update input sequence (allow some out-of-order tolerance for packet loss)
-    if (input.sequence < player.inputSequence - 5) {
-        return; // Ignore very old inputs (likely duplicate/replayed)
-    }
-    
-    player.inputSequence = Math.max(input.sequence, player.inputSequence);
+    // FIXED TIMESTEP - always 1.0 (represents one 60Hz tick)
+    const deltaTime = 1.0;
     
     // Normalize input vector
     let inputX = 0;
@@ -116,29 +114,38 @@ function updatePlayerMovement(player, input, deltaTime) {
         inputY = normalized.y;
     }
     
-    // Apply acceleration
+    // Apply acceleration based on input
     const accel = GAME_CONFIG.PLAYER.ACCELERATION * deltaTime;
     player.velocityX += inputX * accel;
     player.velocityY += inputY * accel;
     
-    // Apply momentum/friction
+    // Handle boost energy drain
+    const isBoosting = input.boost && player.energy > 0;
+    if (isBoosting) {
+        player.energy = Math.max(0, player.energy - GAME_CONFIG.PLAYER.ENERGY.BOOST_DRAIN * deltaTime);
+    }
+    
+    // Update angle
+    if (typeof input.angle === 'number') {
+        player.angle = input.angle;
+    }
+    
+    // Store boost state for physics
+    player.isBoosting = isBoosting;
+}
+
+function updatePlayerPhysics(player) {
+    if (!player) return;
+    
+    const deltaTime = 1.0;
+    
+    // Apply momentum/friction every tick
     const momentumFactor = Math.pow(GAME_CONFIG.PLAYER.MOMENTUM, deltaTime);
     player.velocityX *= momentumFactor;
     player.velocityY *= momentumFactor;
     
-    // Handle boost
-    const isBoosting = input.boost && player.energy > 0;
-    if (isBoosting) {
-        player.energy = Math.max(0, player.energy - GAME_CONFIG.PLAYER.ENERGY.BOOST_DRAIN * deltaTime);
-    } else {
-        player.energy = Math.min(
-            GAME_CONFIG.PLAYER.ENERGY.MAX, 
-            player.energy + GAME_CONFIG.PLAYER.ENERGY.REGEN * deltaTime
-        );
-    }
-    
-    // Cap velocity
-    const maxVel = isBoosting ? GAME_CONFIG.PLAYER.MAX_BOOST_VELOCITY : GAME_CONFIG.PLAYER.MAX_VELOCITY;
+    // Cap velocity based on boost state
+    const maxVel = player.isBoosting ? GAME_CONFIG.PLAYER.MAX_BOOST_VELOCITY : GAME_CONFIG.PLAYER.MAX_VELOCITY;
     const currentSpeed = Math.hypot(player.velocityX, player.velocityY);
     
     if (currentSpeed > maxVel) {
@@ -146,37 +153,23 @@ function updatePlayerMovement(player, input, deltaTime) {
         player.velocityY = (player.velocityY / currentSpeed) * maxVel;
     }
     
-    // Update position
-    const newX = player.x + player.velocityX * deltaTime;
-    const newY = player.y + player.velocityY * deltaTime;
-    
     // Validate velocity is reasonable (anti-speed-hack)
     if (currentSpeed > GAME_CONFIG.VALIDATION.MAX_SPEED) {
         console.warn(`Player ${player.id} has suspicious velocity: ${currentSpeed.toFixed(2)}`);
-        // Cap velocity instead of rejecting the entire input
         const scale = GAME_CONFIG.VALIDATION.MAX_SPEED / currentSpeed;
         player.velocityX *= scale;
         player.velocityY *= scale;
     }
     
-    player.x = newX;
-    player.y = newY;
+    // Update position based on velocity
+    player.x += player.velocityX * deltaTime;
+    player.y += player.velocityY * deltaTime;
     
     // Wall collision - KILL PLAYER
     const r = GAME_CONFIG.PLAYER.RADIUS;
     if (player.x - r <= 0 || player.x + r >= GAME_CONFIG.ARENA_WIDTH ||
         player.y - r <= 0 || player.y + r >= GAME_CONFIG.ARENA_HEIGHT) {
         killPlayer(player.id, null);
-    }
-    
-    // Update angle (if provided)
-    if (typeof input.angle === 'number') {
-        player.angle = input.angle;
-    }
-    
-    // Update invulnerability
-    if (player.invulnerable && Date.now() > player.invulnerableUntil) {
-        player.invulnerable = false;
     }
 }
 
@@ -201,24 +194,25 @@ function handleShoot(playerId, shootData) {
     
     // Validate energy cost
     if (player.energy < bulletType.energyCost) {
-        return; // Not enough energy
+        return;
     }
     
     // Deduct energy
     player.energy -= bulletType.energyCost;
     
-    // Create bullet on server
+    // Create bullet on server (spawn at barrel tip)
+    const barrelLength = 35;
     const bullet = {
-        id: `${playerId}_${gameState.tickCount}_${Date.now()}`,
-        x: player.x + Math.cos(player.angle) * (GAME_CONFIG.PLAYER.RADIUS + 35),
-        y: player.y + Math.sin(player.angle) * (GAME_CONFIG.PLAYER.RADIUS + 35),
+        id: `${playerId}_${gameState.tickCount}_${Math.random()}`,
+        x: player.x + Math.cos(player.angle) * barrelLength,
+        y: player.y + Math.sin(player.angle) * barrelLength,
         vx: Math.cos(player.angle) * bulletType.speed,
         vy: Math.sin(player.angle) * bulletType.speed,
         radius: bulletType.radius,
         damage: bulletType.damage,
         ownerId: playerId,
         chargeLevel: chargeLevel,
-        createdAt: Date.now()
+        createdAtTick: gameState.tickCount
     };
     
     gameState.bullets.push(bullet);
@@ -228,12 +222,16 @@ function handleShoot(playerId, shootData) {
 }
 
 // ==================== BULLET PHYSICS ====================
-function updateBullets(deltaTime) {
+function updateBullets() {
+    // FIXED TIMESTEP - always 1.0
+    const deltaTime = 1.0;
+    
     for (let i = gameState.bullets.length - 1; i >= 0; i--) {
         const bullet = gameState.bullets[i];
         
         // Remove old bullets
-        if (Date.now() - bullet.createdAt > GAME_CONFIG.BULLET.MAX_LIFETIME) {
+        const bulletAge = gameState.tickCount - bullet.createdAtTick;
+        if (bulletAge > GAME_CONFIG.BULLET.MAX_LIFETIME_TICKS) {
             gameState.bullets.splice(i, 1);
             io.emit('bulletRemoved', bullet.id);
             continue;
@@ -254,15 +252,14 @@ function updateBullets(deltaTime) {
         // Check player collisions
         let hitPlayer = false;
         Object.values(gameState.players).forEach(player => {
-            if (player.id === bullet.ownerId) return; // Can't hit yourself
-            if (player.invulnerable) return; // Can't hit invulnerable players
+            if (player.id === bullet.ownerId) return;
+            if (player.invulnerable) return;
             
             const dist = getDistance(bullet.x, bullet.y, player.x, player.y);
             if (dist < bullet.radius + GAME_CONFIG.PLAYER.RADIUS) {
                 // HIT!
                 player.energy -= bullet.damage;
                 
-                // Broadcast hit
                 io.emit('playerHit', {
                     targetId: player.id,
                     shooterId: bullet.ownerId,
@@ -270,7 +267,6 @@ function updateBullets(deltaTime) {
                     energy: player.energy
                 });
                 
-                // Check if player died
                 if (player.energy <= 0) {
                     killPlayer(player.id, bullet.ownerId);
                 }
@@ -293,7 +289,7 @@ function killPlayer(deadPlayerId, killerId) {
     
     // Drop money
     const moneyDrop = {
-        id: `money_${Date.now()}_${Math.random()}`,
+        id: `money_${gameState.tickCount}_${Math.random()}`,
         x: deadPlayer.x,
         y: deadPlayer.y,
         amount: deadPlayer.dollarValue,
@@ -306,7 +302,6 @@ function killPlayer(deadPlayerId, killerId) {
         const killer = gameState.players[killerId];
         killer.killStreak++;
         
-        // Update bounty multiplier
         if (killer.killStreak === 0) {
             killer.bountyMultiplier = 1.0;
         } else if (killer.killStreak < 3) {
@@ -322,7 +317,6 @@ function killPlayer(deadPlayerId, killerId) {
     const respawn = spawnPlayer(deadPlayerId);
     Object.assign(deadPlayer, respawn);
     
-    // Broadcast death
     io.emit('playerDied', {
         playerId: deadPlayerId,
         killerId: killerId,
@@ -332,7 +326,10 @@ function killPlayer(deadPlayerId, killerId) {
 }
 
 // ==================== MONEY PICKUPS ====================
-function updateMoneyPickups(deltaTime) {
+function updateMoneyPickups() {
+    // FIXED TIMESTEP - always 1.0
+    const deltaTime = 1.0;
+    
     Object.values(gameState.players).forEach(player => {
         for (let i = gameState.moneyPickups.length - 1; i >= 0; i--) {
             const money = gameState.moneyPickups[i];
@@ -364,49 +361,51 @@ function updateMoneyPickups(deltaTime) {
 
 // ==================== MAIN GAME LOOP ====================
 function gameLoop() {
-    const now = Date.now();
-    const deltaTime = (now - gameState.lastTickTime) / (1000 / 60); // Normalize to 60 FPS baseline
-    gameState.lastTickTime = now;
     gameState.tickCount++;
     
-    // Update all players with their buffered inputs
+    // Process NEW player inputs (update acceleration, boost state, angle)
     Object.values(gameState.players).forEach(player => {
-        if (player.inputBuffer && player.inputBuffer.length > 0) {
-            // Process ALL buffered inputs this tick
-            player.inputBuffer.forEach(input => {
-                updatePlayerMovement(player, input, deltaTime);
-            });
-            
-            console.log(`[TICK] Player ${player.id.substring(0, 6)} | Processed ${player.inputBuffer.length} inputs`);
-            
-            // Clear buffer after processing
-            player.inputBuffer = [];
-        } else {
-            // No input this tick, apply physics only
-            if (gameState.tickCount % 60 === 0) { // Log once per second
-                console.log(`[TICK] Player ${player.id.substring(0, 6)} | No queued input`);
+        if (player.currentInput && player.currentInput.sequence !== undefined) {
+            // Only process if it's newer than last processed
+            if (player.currentInput.sequence > player.lastProcessedSequence) {
+                processPlayerInput(player, player.currentInput);
+                player.lastProcessedSequence = player.currentInput.sequence;
             }
-            
-            const momentumFactor = Math.pow(GAME_CONFIG.PLAYER.MOMENTUM, deltaTime);
-            player.velocityX *= momentumFactor;
-            player.velocityY *= momentumFactor;
-            
-            player.x += player.velocityX * deltaTime;
-            player.y += player.velocityY * deltaTime;
-            
-            // Regen energy
+        }
+    });
+    
+    // Update physics for ALL players EVERY tick (momentum, position, collision)
+    Object.values(gameState.players).forEach(player => {
+        updatePlayerPhysics(player);
+    });
+    
+    // Update invulnerability for all players
+    Object.values(gameState.players).forEach(player => {
+        if (player.invulnerable && player.invulnerableTicksRemaining > 0) {
+            player.invulnerableTicksRemaining--;
+            if (player.invulnerableTicksRemaining <= 0) {
+                player.invulnerable = false;
+            }
+        }
+    });
+    
+    // Regenerate energy for all players (happens every tick, even without input)
+    Object.values(gameState.players).forEach(player => {
+        // Only regenerate if not boosting (boost drain happens in updatePlayerMovement)
+        const isBoosting = player.currentInput && player.currentInput.boost && player.energy > 0;
+        if (!isBoosting) {
             player.energy = Math.min(
                 GAME_CONFIG.PLAYER.ENERGY.MAX,
-                player.energy + GAME_CONFIG.PLAYER.ENERGY.REGEN * deltaTime
+                player.energy + GAME_CONFIG.PLAYER.ENERGY.REGEN
             );
         }
     });
     
     // Update bullets
-    updateBullets(deltaTime);
+    updateBullets();
     
     // Update money pickups
-    updateMoneyPickups(deltaTime);
+    updateMoneyPickups();
     
     // Broadcast game state to all clients
     broadcastGameState();
@@ -416,7 +415,6 @@ function gameLoop() {
 function broadcastGameState() {
     const snapshot = {
         tick: gameState.tickCount,
-        timestamp: Date.now(),
         players: Object.values(gameState.players).map(p => ({
             id: p.id,
             x: p.x,
@@ -427,6 +425,7 @@ function broadcastGameState() {
             energy: p.energy,
             dollarValue: p.dollarValue,
             invulnerable: p.invulnerable,
+            invulnerableTicksRemaining: p.invulnerableTicksRemaining,
             killStreak: p.killStreak,
             bountyMultiplier: p.bountyMultiplier
         })),
@@ -439,11 +438,7 @@ function broadcastGameState() {
 
 // ==================== SOCKET HANDLERS ====================
 io.on('connection', (socket) => {
-    const connectTime = Date.now();
-    console.log('========================================');
     console.log(`[CONNECT] Player ${socket.id}`);
-    console.log(`[CONNECT] Server time: ${connectTime}`);
-    console.log('========================================');
     
     // Create new player
     gameState.players[socket.id] = spawnPlayer(socket.id);
@@ -462,24 +457,12 @@ io.on('connection', (socket) => {
     // Notify others
     socket.broadcast.emit('playerJoined', gameState.players[socket.id]);
     
-    // Handle player input
+    // Handle player input - BUFFER IT, don't process immediately!
     socket.on('input', (input) => {
         const player = gameState.players[socket.id];
         if (player) {
-            // Debug logging
-            const inputAge = Date.now() - input.timestamp;
-            console.log(`[INPUT] Player ${socket.id.substring(0, 6)} | Age: ${inputAge}ms | Seq: ${input.sequence}`);
-            
-            // Buffer inputs instead of overwriting (handle high-ping packet accumulation)
-            if (!player.inputBuffer) {
-                player.inputBuffer = [];
-            }
-            player.inputBuffer.push(input);
-            
-            // Limit buffer size to prevent memory issues
-            if (player.inputBuffer.length > 10) {
-                player.inputBuffer.shift(); // Remove oldest
-            }
+            // Store the most recent input to be processed on next tick
+            player.currentInput = input;
         }
     });
     
@@ -495,9 +478,7 @@ io.on('connection', (socket) => {
     
     // Handle disconnect
     socket.on('disconnect', () => {
-        console.log('========================================');
         console.log(`[DISCONNECT] Player ${socket.id}`);
-        console.log('========================================');
         delete gameState.players[socket.id];
         io.emit('playerLeft', socket.id);
     });
@@ -537,9 +518,7 @@ http.listen(PORT, () => {
     console.log(`🎮 Strafe server running on port ${PORT}`);
     console.log(`⚡ Tick rate: ${GAME_CONFIG.TICK_RATE} TPS`);
     
-    // Start game loop
+    // Start game loop at FIXED interval
     const tickInterval = 1000 / GAME_CONFIG.TICK_RATE;
     setInterval(gameLoop, tickInterval);
-    
-    gameState.lastTickTime = Date.now();
 });
