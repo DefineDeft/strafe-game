@@ -95,18 +95,26 @@ function spawnPlayer(socketId) {
 
 // ==================== PHYSICS & MOVEMENT ====================
 function updatePlayerMovement(player, input, deltaTime) {
-    if (!input) return;
+    if (!input) {
+        console.log(`[MOVE] Player ${player.id.substring(0, 6)} | No input this tick`);
+        return;
+    }
     
     // Validate input timestamp (prevent replay attacks)
     const inputAge = Date.now() - input.timestamp;
     if (inputAge > GAME_CONFIG.VALIDATION.INPUT_TIMEOUT) {
+        console.log(`[REJECT] Player ${player.id.substring(0, 6)} | Input too old: ${inputAge}ms (limit: ${GAME_CONFIG.VALIDATION.INPUT_TIMEOUT}ms)`);
         return; // Ignore old inputs
     }
     
     // Update input sequence (allow some out-of-order tolerance for packet loss)
     if (input.sequence < player.inputSequence - 5) {
+        console.log(`[REJECT] Player ${player.id.substring(0, 6)} | Old sequence: ${input.sequence} (current: ${player.inputSequence})`);
         return; // Ignore very old inputs (likely duplicate/replayed)
     }
+    
+    console.log(`[PROCESS] Player ${player.id.substring(0, 6)} | Age: ${inputAge}ms | Seq: ${input.sequence} | Pos: (${player.x.toFixed(1)}, ${player.y.toFixed(1)})`);
+    
     player.inputSequence = Math.max(input.sequence, player.inputSequence);
     player.lastInputTime = input.timestamp;
     
@@ -387,6 +395,10 @@ function gameLoop() {
             player.queuedInput = null; // Clear after processing
         } else {
             // No input this tick, apply physics only
+            if (gameState.tickCount % 60 === 0) { // Log once per second
+                console.log(`[TICK] Player ${player.id.substring(0, 6)} | No queued input`);
+            }
+            
             const momentumFactor = Math.pow(GAME_CONFIG.PLAYER.MOMENTUM, deltaTime);
             player.velocityX *= momentumFactor;
             player.velocityY *= momentumFactor;
@@ -439,7 +451,11 @@ function broadcastGameState() {
 
 // ==================== SOCKET HANDLERS ====================
 io.on('connection', (socket) => {
-    console.log('Player connected:', socket.id);
+    const connectTime = Date.now();
+    console.log('========================================');
+    console.log(`[CONNECT] Player ${socket.id}`);
+    console.log(`[CONNECT] Server time: ${connectTime}`);
+    console.log('========================================');
     
     // Create new player
     gameState.players[socket.id] = spawnPlayer(socket.id);
@@ -462,6 +478,10 @@ io.on('connection', (socket) => {
     socket.on('input', (input) => {
         const player = gameState.players[socket.id];
         if (player) {
+            // Debug logging
+            const inputAge = Date.now() - input.timestamp;
+            console.log(`[INPUT] Player ${socket.id.substring(0, 6)} | Age: ${inputAge}ms | Seq: ${input.sequence}`);
+            
             // Queue input for next tick
             player.queuedInput = input;
         }
@@ -479,7 +499,9 @@ io.on('connection', (socket) => {
     
     // Handle disconnect
     socket.on('disconnect', () => {
-        console.log('Player disconnected:', socket.id);
+        console.log('========================================');
+        console.log(`[DISCONNECT] Player ${socket.id}`);
+        console.log('========================================');
         delete gameState.players[socket.id];
         io.emit('playerLeft', socket.id);
     });

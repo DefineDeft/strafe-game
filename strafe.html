@@ -591,6 +591,11 @@
                 )
             };
             
+            // Debug log (only log every 60 frames = once per second at 60fps)
+            if (game.inputSequence % 60 === 0) {
+                console.log(`[CLIENT] Sending input | Seq: ${input.sequence} | Time: ${input.timestamp}`);
+            }
+            
             socket.emit('input', input);
             game.pendingInputs.push(input);
             applyInput(game.player, input, deltaTime);
