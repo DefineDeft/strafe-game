@@ -42,8 +42,7 @@ const GAME_CONFIG = {
     },
     
     VALIDATION: {
-        MAX_SPEED: 10, // Maximum allowed speed (with buffer for boost)
-        INPUT_TIMEOUT: 200 // Ignore inputs older than 200ms (increased for high ping)
+        MAX_SPEED: 10 // Maximum allowed speed (with buffer for boost)
     }
 };
 
@@ -86,34 +85,20 @@ function spawnPlayer(socketId) {
         invulnerableUntil: Date.now() + GAME_CONFIG.PLAYER.INVULNERABLE_DURATION,
         killStreak: 0,
         bountyMultiplier: 1.0,
-        
-        // Input state
-        lastInputTime: Date.now(),
         inputSequence: 0
     };
 }
 
 // ==================== PHYSICS & MOVEMENT ====================
 function updatePlayerMovement(player, input, deltaTime) {
-    if (!input) {
-        console.log(`[MOVE] Player ${player.id.substring(0, 6)} | No input this tick`);
-        return;
-    }
-    
-    // Don't validate timestamp - client/server clocks can be desynced!
-    // Just process the input
+    if (!input) return;
     
     // Update input sequence (allow some out-of-order tolerance for packet loss)
     if (input.sequence < player.inputSequence - 5) {
-        console.log(`[REJECT] Player ${player.id.substring(0, 6)} | Old sequence: ${input.sequence} (current: ${player.inputSequence})`);
         return; // Ignore very old inputs (likely duplicate/replayed)
     }
     
-    const inputAge = Date.now() - input.timestamp;
-    console.log(`[PROCESS] Player ${player.id.substring(0, 6)} | Age: ${inputAge}ms | Seq: ${input.sequence} | Pos: (${player.x.toFixed(1)}, ${player.y.toFixed(1)})`);
-    
     player.inputSequence = Math.max(input.sequence, player.inputSequence);
-    player.lastInputTime = input.timestamp;
     
     // Normalize input vector
     let inputX = 0;
@@ -165,8 +150,7 @@ function updatePlayerMovement(player, input, deltaTime) {
     const newX = player.x + player.velocityX * deltaTime;
     const newY = player.y + player.velocityY * deltaTime;
     
-    // Double-check velocity is reasonable (anti-speed-hack)
-    // currentSpeed already calculated above at line 152
+    // Validate velocity is reasonable (anti-speed-hack)
     if (currentSpeed > GAME_CONFIG.VALIDATION.MAX_SPEED) {
         console.warn(`Player ${player.id} has suspicious velocity: ${currentSpeed.toFixed(2)}`);
         // Cap velocity instead of rejecting the entire input
